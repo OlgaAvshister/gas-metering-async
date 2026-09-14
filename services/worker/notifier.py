@@ -40,17 +40,19 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logging.getLogger("pika").setLevel(logging.WARNING)
 log = logging.getLogger("notifier")
 
-
 def death_count(properties) -> int:
-    """How many times this message has already been dead-lettered.
+    """How many times this message has been dead-lettered from the work queue.
 
-    RabbitMQ records each cycle in the x-death header, which is how the worker
-    knows when to stop retrying.
+    The x-death header holds one entry per queue a message has died in, and a
+    single retry cycle touches two of them: the work queue on rejection and the
+    retry queue on TTL expiry. Summing every entry therefore double-counts, so
+    only the work queue is consulted.
     """
     headers = properties.headers or {}
-    deaths = headers.get("x-death") or []
-    return sum(entry.get("count", 0) for entry in deaths)
-
+    for entry in headers.get("x-death") or []:
+        if entry.get("queue") == QUEUE_SEND:
+            return entry.get("count", 0)
+    return 0
 
 def send_notification(payload: dict) -> None:
     """Stand-in for the real email or SMS gateway."""
