@@ -91,6 +91,22 @@ def mark_notification(pool, deviation_id: str, status: str, attempts: int, error
             },
         )
 
+def already_sent(pool, deviation_id: str) -> bool:
+    """Has this deviation already been notified?
+
+    Sending is not idempotent — two emails cannot be collapsed into one after
+    the fact — so the only protection against at-least-once redelivery is to
+    check before sending. The notification row is written in the same step as
+    the send, so its presence means the gateway already accepted the message.
+    """
+    with pool.connection() as conn:
+        conn.row_factory = dict_row
+        row = conn.execute(
+            "SELECT 1 FROM notification WHERE deviation_id = %s AND status = 'sent'",
+            (deviation_id,),
+        ).fetchone()
+    return row is not None
+
 
 def main() -> None:
     pool = ConnectionPool(DATABASE_URL, min_size=1, max_size=2, open=True)
@@ -102,7 +118,10 @@ def main() -> None:
         payload = json.loads(body)
         deviation_id = payload["deviation_id"]
         attempts = death_count(properties) + 1
-
+        if already_sent(pool, deviation_id):
+            log.info("deviation %s already notified, acknowledging", deviation_id)
+            ch.basic_ack(method.delivery_tag)
+            return
         try:
             send_notification(payload)
         except Exception as exc:
