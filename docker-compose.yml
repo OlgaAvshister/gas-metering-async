@@ -73,6 +73,77 @@ services:
     ports:
       - "8080:8080"
 
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://gas:gas@postgres:5432/gas_metering
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  relay:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: ["python", "services/relay/relay.py"]
+    environment:
+      DATABASE_URL: postgresql://gas:gas@postgres:5432/gas_metering
+      KAFKA_BOOTSTRAP: kafka:9092
+      RABBITMQ_URL: amqp://gas:gas@rabbitmq:5672/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  aggregator:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: ["python", "services/consumer/aggregator.py"]
+    environment:
+      DATABASE_URL: postgresql://gas:gas@postgres:5432/gas_metering
+      KAFKA_BOOTSTRAP: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  detector:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: ["python", "services/consumer/deviation_detector.py"]
+    environment:
+      DATABASE_URL: postgresql://gas:gas@postgres:5432/gas_metering
+      KAFKA_BOOTSTRAP: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  notifier:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: ["python", "services/worker/notifier.py"]
+    environment:
+      DATABASE_URL: postgresql://gas:gas@postgres:5432/gas_metering
+      RABBITMQ_URL: amqp://gas:gas@rabbitmq:5672/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
 volumes:
   pgdata:
   kafkadata:
