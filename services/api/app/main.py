@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
@@ -57,9 +57,14 @@ class IntakeResult(BaseModel):
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
-
 @app.post("/measurements", response_model=IntakeResult)
-def ingest(batch: MeasurementBatch) -> IntakeResult:
+def ingest(
+    batch: MeasurementBatch,
+    x_correlation_id: str | None = Header(default=None),
+) -> IntakeResult:
+    # Honour a correlation id supplied by the caller so a chain that starts in
+    # another system stays connected; otherwise start a new one here.
+    correlation_id = x_correlation_id or str(uuid4())
     codes = {m.node_code for m in batch.measurements}
 
     with pool.connection() as conn:
@@ -88,9 +93,9 @@ def ingest(batch: MeasurementBatch) -> IntakeResult:
                     """
                     INSERT INTO measurement (
                         id, node_id, measured_at,
-                        flow_rate, pressure, temperature, source
+                        flow_rate, pressure, temperature, source, correlation_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (node_id, measured_at) DO NOTHING
                     RETURNING id
                     """,
@@ -102,6 +107,7 @@ def ingest(batch: MeasurementBatch) -> IntakeResult:
                         m.pressure,
                         m.temperature,
                         m.source,
+                        correlation_id,
                     ),
                 ).fetchone()
 
@@ -123,9 +129,9 @@ def ingest(batch: MeasurementBatch) -> IntakeResult:
                     """
                     INSERT INTO outbox (
                         aggregate_type, aggregate_id,
-                        event_type, partition_key, payload
+                        event_type, partition_key, payload, correlation_id
                     )
-                    VALUES (%s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
                         "measurement",
@@ -133,6 +139,7 @@ def ingest(batch: MeasurementBatch) -> IntakeResult:
                         "measurement.recorded",
                         str(node_id),
                         json.dumps(payload),
+                        correlation_id,
                     ),
                 )
                 accepted += 1

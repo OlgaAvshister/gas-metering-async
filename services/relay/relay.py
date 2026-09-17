@@ -96,7 +96,10 @@ def publish_kafka(rows, producer: Producer):
             topic=TOPIC,
             key=row["partition_key"].encode(),
             value=json.dumps(row["payload"]).encode(),
-            headers=[("event_type", row["event_type"])],
+            headers=[
+                ("event_type", row["event_type"]),
+                ("correlation_id", str(row["correlation_id"] or "")),
+            ],
             on_delivery=lambda err, msg, row_id=row["id"]: on_delivery(err, msg, row_id),
         )
 
@@ -116,6 +119,7 @@ def publish_rabbit(rows, rabbit: RabbitChannel):
                 body=json.dumps(row["payload"]).encode(),
                 properties=pika.BasicProperties(
                     content_type="application/json",
+                    correlation_id=str(row["correlation_id"] or ""),
                     # Persist the message to disk so a broker restart does not
                     # empty a durable queue.
                     delivery_mode=2,
@@ -134,7 +138,7 @@ def publish_batch(conn, producer: Producer, rabbit: RabbitChannel) -> int:
     rows = conn.execute(
         """
         SELECT id, aggregate_id, event_type, destination,
-               partition_key, routing_key, payload
+            partition_key, routing_key, payload, correlation_id
         FROM outbox
         WHERE published_at IS NULL
         ORDER BY id

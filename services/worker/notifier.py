@@ -118,6 +118,7 @@ def main() -> None:
         payload = json.loads(body)
         deviation_id = payload["deviation_id"]
         attempts = death_count(properties) + 1
+        correlation_id = properties.correlation_id or "-"
         if already_sent(pool, deviation_id):
             log.info("deviation %s already notified, acknowledging", deviation_id)
             ch.basic_ack(method.delivery_tag)

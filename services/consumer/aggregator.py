@@ -107,6 +107,12 @@ def recompute_hour(conn, node_id: str, measured_at: str) -> None:
         },
     )
 
+def correlation_of(msg) -> str:
+    """Pull the correlation id out of the Kafka headers."""
+    for name, value in msg.headers() or []:
+        if name == "correlation_id" and value:
+            return value.decode()
+    return "-"
 
 def handle(conn, event: dict) -> bool:
     message_key = event["measurement_id"]
@@ -153,7 +159,7 @@ def main() -> None:
 
         try:
             event = json.loads(msg.value())
-
+            correlation_id = correlation_of(msg)
             with pool.connection() as conn:
                 conn.row_factory = dict_row
                 with conn.transaction():
@@ -164,11 +170,12 @@ def main() -> None:
 
             if processed:
                 log.info(
-                    "aggregated node=%s measured_at=%s partition=%s offset=%s",
+                    "aggregated node=%s measured_at=%s partition=%s offset=%s cid=%s",
                     event["node_code"],
                     event["measured_at"],
                     msg.partition(),
                     msg.offset(),
+                    correlation_id,
                 )
         except Exception as exc:
             if poison.should_retry(msg):

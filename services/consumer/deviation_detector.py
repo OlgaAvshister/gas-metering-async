@@ -100,7 +100,9 @@ def has_open_accumulated_deviation(conn, delivery_point_id, start, end) -> bool:
     return row is not None
 
 
-def record_deviation(conn, kind, node_id, nomination, measured_at, planned, actual):
+def record_deviation(
+    conn, kind, node_id, nomination, measured_at, planned, actual, correlation_id
+):
     deviation_id = uuid4()
     deviation_pct = (actual - planned) / planned * 100 if planned else 0
     threshold = (
@@ -113,9 +115,10 @@ def record_deviation(conn, kind, node_id, nomination, measured_at, planned, actu
         """
         INSERT INTO deviation (
             id, node_id, delivery_point_id, measured_at,
-            nominated_value, actual_value, deviation_pct, threshold_pct, kind
+            nominated_value, actual_value, deviation_pct, threshold_pct, kind,
+            correlation_id
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             deviation_id,
@@ -127,12 +130,15 @@ def record_deviation(conn, kind, node_id, nomination, measured_at, planned, actu
             deviation_pct,
             threshold,
             kind,
+            correlation_id,
         ),
     )
     return deviation_id, deviation_pct
 
 
-def queue_notification(conn, deviation_id, nomination, deviation_pct, measured_at):
+def queue_notification(
+    conn, deviation_id, nomination, deviation_pct, measured_at, correlation_id
+):
     """Write the notification command to the outbox in the same transaction.
 
     The deviation row and the command are committed together; the relay
@@ -161,9 +167,9 @@ def queue_notification(conn, deviation_id, nomination, deviation_pct, measured_a
         """
         INSERT INTO outbox (
             aggregate_type, aggregate_id, event_type,
-            partition_key, routing_key, destination, payload
+            partition_key, routing_key, destination, payload, correlation_id
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             "deviation",
@@ -173,11 +179,18 @@ def queue_notification(conn, deviation_id, nomination, deviation_pct, measured_a
             "notification.send",
             "rabbitmq",
             json.dumps(payload),
+            correlation_id,
         ),
     )
 
+def correlation_of(msg) -> str:
+    """Pull the correlation id out of the Kafka headers."""
+    for name, value in msg.headers() or []:
+        if name == "correlation_id" and value:
+            return value.decode()
+    return "-"
 
-def handle(conn, event: dict) -> None:
+def handle(conn, event: dict, correlation_id: str) -> None:
     message_key = event["measurement_id"]
 
     row = conn.execute(
@@ -212,7 +225,7 @@ def handle(conn, event: dict) -> None:
     if instant_pct > float(nomination["threshold_pct"]):
         record_deviation(
             conn, "instantaneous", node_id, nomination,
-            measured_at, planned_hourly, actual_rate,
+            measured_at, planned_hourly, actual_rate, correlation_id,
         )
         log.info("instantaneous deviation %.2f%% on node %s", instant_pct, node_id)
 
@@ -238,9 +251,11 @@ def handle(conn, event: dict) -> None:
 
     deviation_id, pct = record_deviation(
         conn, "accumulated", node_id, nomination,
-        measured_at, planned_so_far, actual_so_far,
+        measured_at, planned_so_far, actual_so_far, correlation_id,
     )
-    queue_notification(conn, deviation_id, nomination, pct, event["measured_at"])
+    queue_notification(
+        conn, deviation_id, nomination, pct, event["measured_at"], correlation_id
+    )
     log.info("accumulated deviation %.2f%%, notification queued", pct)
 
 
@@ -268,10 +283,11 @@ def main() -> None:
 
         try:
             event = json.loads(msg.value())
+            correlation_id = correlation_of(msg)
             with pool.connection() as conn:
                 conn.row_factory = dict_row
                 with conn.transaction():
-                    handle(conn, event)
+                    handle(conn, event, correlation_id)
             consumer.commit(msg)
         except Exception:
             log.exception("failed to handle offset %s, not committing", msg.offset())
