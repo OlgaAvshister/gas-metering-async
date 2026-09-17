@@ -13,8 +13,12 @@ import json
 import logging
 import os
 import signal
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import time
 
-from confluent_kafka import Consumer, KafkaError
+from confluent_kafka import Consumer, KafkaError, TopicPartition
+from poison import PoisonHandler
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
@@ -25,6 +29,9 @@ KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "localhost:29092")
 TOPIC = os.getenv("TOPIC", "measurements.recorded")
 GROUP_ID = os.getenv("GROUP_ID", "hourly-aggregator")
 CONSUMER_NAME = "hourly-aggregator"
+# Pause between retries so a transient failure has time to clear.
+RETRY_DELAY = 2.0
+DLT_TOPIC = os.getenv("DLT_TOPIC", "measurements.dlt")
 
 # NFR-9: one measurement per minute, so a complete hour holds sixty of them.
 MEASUREMENTS_PER_HOUR = 60
@@ -131,6 +138,7 @@ def main() -> None:
         }
     )
     consumer.subscribe([TOPIC])
+    poison = PoisonHandler(KAFKA_BOOTSTRAP, DLT_TOPIC, CONSUMER_NAME)
     log.info("consumer started, topic=%s group=%s", TOPIC, GROUP_ID)
 
     while running:
@@ -151,6 +159,7 @@ def main() -> None:
                 with conn.transaction():
                     processed = handle(conn, event)
 
+            poison.forget(msg)
             consumer.commit(msg)
 
             if processed:
@@ -161,10 +170,23 @@ def main() -> None:
                     msg.partition(),
                     msg.offset(),
                 )
-        except Exception:
-            # Leave the offset where it is: the message will be redelivered.
-            log.exception("failed to handle offset %s, not committing", msg.offset())
-
+        except Exception as exc:
+            if poison.should_retry(msg):
+                log.warning(
+                    "failed to handle offset %s, will retry: %s", msg.offset(), exc
+                )
+                # poll() would hand over the next message, so rewind the
+                # partition to this offset to actually retry the same one.
+                consumer.seek(
+                    TopicPartition(msg.topic(), msg.partition(), msg.offset())
+                )
+                time.sleep(RETRY_DELAY)
+                continue
+            # Out of retries: park the message and move the partition forward,
+            # otherwise everything behind it stops too.
+            poison.send_to_dlt(msg, str(exc))
+            consumer.commit(msg)
+    poison.close()
     consumer.close()
     pool.close()
     log.info("consumer stopped")
