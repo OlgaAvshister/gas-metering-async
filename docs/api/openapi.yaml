@@ -1,0 +1,2607 @@
+openapi: 3.0.3
+
+info:
+  title: Gas metering and reconciliation system
+  version: 1.0.0
+  description: |
+    Contract between the backend, the web interface and the external systems it
+    integrates with: the SCADA gateway, the laboratory information system and the
+    counterparty's own systems.
+
+    Endpoints are grouped by the subject blocks of the data model. Every
+    operation states its parameters, request schema, response codes and payloads,
+    including validation errors, access refusals and conflicts.
+
+    Two conventions run through the whole specification and follow from the
+    architecture rather than from taste:
+
+    * Every figure belongs to either the operational layer or the accounting
+      layer, and the two never mix in one response (ADR-001, FR-05).
+    * Accounting values are append-only. A correction creates a new version and
+      leaves the previous one readable (FR-12, NFR-11).
+
+    Requirement identifiers in the operation descriptions refer to
+    `docs/requirements`.
+
+servers:
+  - url: https://gas-metering.example/api/v1
+    description: Production
+  - url: http://localhost:8000/api/v1
+    description: Local
+
+tags:
+  - name: Authentication
+  - name: Metering nodes
+  - name: Operational layer
+  - name: Gas composition
+  - name: Accounting layer
+  - name: Contracts
+  - name: Deviations
+  - name: Reporting periods
+  - name: Acts
+  - name: Reconciliation
+  - name: Reporting and export
+  - name: Administration
+  - name: Operations
+
+security:
+  - bearerAuth: []
+
+paths:
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Sign in
+      description: Authenticates by login and password (FR-01). UC-16 issues the credentials.
+      security: []
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Signed in
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '423':
+          description: The account is blocked (UC-17)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Sign out
+      operationId: logout
+      responses:
+        '204':
+          description: Signed out
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /nodes:
+    get:
+      tags: [Metering nodes]
+      summary: List metering nodes
+      description: |
+        Only the nodes the caller may see. For a counterparty representative that
+        is the nodes linked to its own delivery point (NFR-12).
+      operationId: listNodes
+      parameters:
+        - $ref: '#/components/parameters/DeliveryPointFilter'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: The nodes visible to the caller
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MeteringNode'
+                  total:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /nodes/{nodeId}:
+    parameters:
+      - $ref: '#/components/parameters/NodeId'
+    get:
+      tags: [Metering nodes]
+      summary: Get a metering node
+      operationId: getNode
+      responses:
+        '200':
+          description: The node
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeteringNode'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /nodes/{nodeId}/status:
+    parameters:
+      - $ref: '#/components/parameters/NodeId'
+    get:
+      tags: [Metering nodes]
+      summary: Connection status of a node
+      description: |
+        Drives UC-03. When the connection is lost the response carries the last
+        trustworthy measurement and the time since data stopped arriving.
+        Interpolation and extrapolation are never applied (FR-14, ADR-005).
+      operationId: getNodeStatus
+      responses:
+        '200':
+          description: Current status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeStatus'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /measurements:
+    post:
+      tags: [Operational layer]
+      summary: Submit telemetry
+      description: |
+        Intake from the SCADA gateway (FR-08). A batch is one telemetry packet.
+        Readings that fail validation are stored marked suspect and excluded from
+        accounting calculations rather than rejected outright.
+
+        The operation is idempotent on the pair (node, measurement time), which
+        is what lets a controller archive be re-read after an outage without
+        creating duplicates (FR-16, NFR-6). Re-submitted readings are counted as
+        duplicates in the response and are not stored twice.
+      operationId: submitMeasurements
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MeasurementBatch'
+      responses:
+        '200':
+          description: Batch accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntakeResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /nodes/{nodeId}/measurements:
+    parameters:
+      - $ref: '#/components/parameters/NodeId'
+    get:
+      tags: [Operational layer]
+      summary: Raw measurements for a node
+      description: |
+        The operational layer only (UC-04). Figures are at operating conditions
+        and carry no legal weight; the accounting layer is served by
+        `/accounting-values`.
+      operationId: listMeasurements
+      parameters:
+        - $ref: '#/components/parameters/PeriodStart'
+        - $ref: '#/components/parameters/PeriodEnd'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Measurements in the period
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, layer]
+                properties:
+                  layer:
+                    $ref: '#/components/schemas/DataLayer'
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Measurement'
+                  total:
+                    type: integer
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /nodes/{nodeId}/hourly-aggregates:
+    parameters:
+      - $ref: '#/components/parameters/NodeId'
+    get:
+      tags: [Operational layer]
+      summary: Hourly aggregates for a node
+      description: |
+        An aggregate with `is_complete = false` holds fewer readings than the
+        sampling rate implies (NFR-9), because of an outage or because the hour
+        is still filling up.
+      operationId: listHourlyAggregates
+      parameters:
+        - $ref: '#/components/parameters/PeriodStart'
+        - $ref: '#/components/parameters/PeriodEnd'
+      responses:
+        '200':
+          description: Aggregates in the period
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HourlyAggregate'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /gas-compositions:
+    get:
+      tags: [Gas composition]
+      summary: List chromatography results
+      operationId: listGasCompositions
+      parameters:
+        - $ref: '#/components/parameters/NodeFilter'
+        - $ref: '#/components/parameters/PeriodStart'
+        - $ref: '#/components/parameters/PeriodEnd'
+      responses:
+        '200':
+          description: Results in the period
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GasComposition'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Gas composition]
+      summary: Submit a chromatography result
+      description: |
+        From the laboratory information system, or entered by hand when automatic
+        intake is unavailable (FR-09, UC-23). Components must sum to 100%.
+
+        A result whose sampling period is already closed is accepted and flagged
+        as requiring a corrective act (ADR-002); it does not reopen the period.
+      operationId: submitGasComposition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GasCompositionRequest'
+      responses:
+        '201':
+          description: Stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GasComposition'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /accounting-values:
+    get:
+      tags: [Accounting layer]
+      summary: List accounting values
+      description: |
+        Corrected to standard conditions (FR-04). By default only the current
+        version of each value; `include_superseded` returns the full history,
+        which is what UC-11 and UC-14 need for verification.
+      operationId: listAccountingValues
+      parameters:
+        - $ref: '#/components/parameters/NodeFilter'
+        - $ref: '#/components/parameters/DeliveryPointFilter'
+        - $ref: '#/components/parameters/PeriodStart'
+        - $ref: '#/components/parameters/PeriodEnd'
+        - name: include_superseded
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Accounting values
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, layer]
+                properties:
+                  layer:
+                    $ref: '#/components/schemas/DataLayer'
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AccountingValue'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /accounting-values/recalculate:
+    post:
+      tags: [Accounting layer]
+      summary: Recalculate a period
+      description: |
+        Manual recalculation (UC-06). Normally the system recalculates by itself
+        once telemetry and a gas composition are both present (FR-10).
+
+        A recalculation never overwrites: it creates a new version of the value
+        and an entry in the adjustment journal (FR-12, FR-13). A closed period is
+        refused — only a corrective act can change it (FR-17, ADR-002).
+      operationId: recalculateAccountingValues
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecalculationRequest'
+      responses:
+        '202':
+          description: Recalculation started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecalculationResult'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The reporting period is closed
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /adjustment-log:
+    get:
+      tags: [Accounting layer]
+      summary: The adjustment journal
+      description: |
+        Every change to accounting data, with the previous and new value and the
+        grounds (FR-13, UC-07). A counterparty representative sees only its own
+        delivery point (NFR-12, UC-14).
+      operationId: listAdjustments
+      parameters:
+        - $ref: '#/components/parameters/NodeFilter'
+        - $ref: '#/components/parameters/DeliveryPointFilter'
+        - $ref: '#/components/parameters/PeriodStart'
+        - $ref: '#/components/parameters/PeriodEnd'
+        - name: changed_by_user_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Journal entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AdjustmentLogEntry'
+                  total:
+                    type: integer
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /delivery-points:
+    get:
+      tags: [Contracts]
+      summary: List delivery points
+      operationId: listDeliveryPoints
+      responses:
+        '200':
+          description: The delivery points visible to the caller
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DeliveryPoint'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /delivery-points/{deliveryPointId}/nomination-status:
+    parameters:
+      - $ref: '#/components/parameters/DeliveryPointId'
+    get:
+      tags: [Contracts]
+      summary: Nomination against actual flow
+      description: |
+        The dispatcher's main view (UC-01, FR-06): the planned daily nomination
+        and the actual raw flow on one time axis, for the current gas day unless
+        another is asked for.
+
+        Figures come from the operational layer and are marked as such. The gas
+        day runs 10:00 to 10:00.
+      operationId: getNominationStatus
+      parameters:
+        - name: gas_day
+          in: query
+          description: Defaults to the gas day in progress.
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Plan against fact
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NominationStatus'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /delivery-points/{deliveryPointId}/contract-parameters:
+    parameters:
+      - $ref: '#/components/parameters/DeliveryPointId'
+    get:
+      tags: [Contracts]
+      summary: Contract parameters and their history
+      description: |
+        Nominations and deviation thresholds (FR-07). Validity is an interval, so
+        the parameters in force at any past moment stay recoverable. Exactly one
+        version is in force at a time.
+
+        These are reference data and are not editable through the API in the MVP
+        (FR-30, UC-19).
+      operationId: listContractParameters
+      parameters:
+        - name: in_force_at
+          in: query
+          description: Returns the single version in force at this moment.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Parameter versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ContractParameter'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /deviations:
+    get:
+      tags: [Deviations]
+      summary: List deviations
+      description: |
+        Recorded deviations from the nomination (FR-07). Each carries the contract
+        parameter version it was judged against, so a later change of nomination
+        does not make a past deviation unexplainable.
+      operationId: listDeviations
+      parameters:
+        - $ref: '#/components/parameters/NodeFilter'
+        - $ref: '#/components/parameters/DeliveryPointFilter'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/DeviationStatus'
+        - $ref: '#/components/parameters/PeriodStart'
+        - $ref: '#/components/parameters/PeriodEnd'
+      responses:
+        '200':
+          description: Deviations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Deviation'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /deviations/{deviationId}/acknowledge:
+    parameters:
+      - $ref: '#/components/parameters/DeviationId'
+    post:
+      tags: [Deviations]
+      summary: Acknowledge a deviation
+      description: |
+        The dispatcher confirms the alarm has been seen and states what was done
+        (UC-02). Acknowledging does not resolve the deviation: it stays open until
+        the flow returns inside the corridor.
+      operationId: acknowledgeDeviation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment:
+                  type: string
+                  description: What was done, or why nothing was.
+      responses:
+        '200':
+          description: Acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Deviation'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Already acknowledged
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /deviations/{deviationId}/notifications:
+    parameters:
+      - $ref: '#/components/parameters/DeviationId'
+    get:
+      tags: [Deviations]
+      summary: Notifications raised by a deviation
+      description: |
+        Delivery attempts and their outcome (FR-22, UC-13). A notification with
+        status `dead` exhausted its retries and was left for manual handling; a
+        non-delivery is always recorded rather than dropped.
+      operationId: listDeviationNotifications
+      responses:
+        '200':
+          description: Notifications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Notification'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /reporting-periods:
+    get:
+      tags: [Reporting periods]
+      summary: List reporting periods
+      description: |
+        Each period carries the closing deadline of T + 10 working days (FR-17).
+        The deadline is stored, not computed, so the rule an act was subject to
+        stays recoverable.
+      operationId: listReportingPeriods
+      parameters:
+        - $ref: '#/components/parameters/DeliveryPointFilter'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ReportingPeriodStatus'
+      responses:
+        '200':
+          description: Reporting periods
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ReportingPeriod'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /reporting-periods/{periodId}/readiness:
+    parameters:
+      - $ref: '#/components/parameters/PeriodId'
+    get:
+      tags: [Reporting periods]
+      summary: Whether the inputs for a calculation have arrived
+      description: |
+        UC-05: telemetry, gas composition and method version, each reported as
+        received, awaited or partly lost, so the engineer can see what is holding
+        the calculation up.
+      operationId: getPeriodReadiness
+      responses:
+        '200':
+          description: Input status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PeriodReadiness'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /acts:
+    get:
+      tags: [Acts]
+      summary: List transfer acts
+      operationId: listActs
+      parameters:
+        - $ref: '#/components/parameters/DeliveryPointFilter'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ActStatus'
+      responses:
+        '200':
+          description: Acts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TransferAct'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Acts]
+      summary: Produce a transfer act
+      description: |
+        Assembles the act for a reporting period from the accounting layer and
+        generates the PDF (FR-19, UC-08).
+
+        A period that is not fully calculated is refused unless
+        `allow_incomplete` is set, in which case the substituted stretches are
+        flagged in the act (FR-15). A period whose act is already signed is
+        refused outright: only a corrective act can follow.
+      operationId: createAct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActRequest'
+      responses:
+        '201':
+          description: Act produced
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferAct'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The period is closed, or an act already exists for it
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /acts/{actId}:
+    parameters:
+      - $ref: '#/components/parameters/ActId'
+    get:
+      tags: [Acts]
+      summary: Get a transfer act
+      description: |
+        Includes the lines and, through them, the accounting values each line was
+        built from — which is what makes FR-27 reproducibility possible.
+      operationId: getAct
+      responses:
+        '200':
+          description: The act
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferActDetail'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /acts/{actId}/pdf:
+    parameters:
+      - $ref: '#/components/parameters/ActId'
+    get:
+      tags: [Acts]
+      summary: Download the act as PDF
+      operationId: getActPdf
+      responses:
+        '200':
+          description: The document
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /acts/{actId}/signatures:
+    parameters:
+      - $ref: '#/components/parameters/ActId'
+    get:
+      tags: [Acts]
+      summary: Signatures on an act
+      operationId: listSignatures
+      responses:
+        '200':
+          description: Signatures recorded so far
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ActSignature'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [Acts]
+      summary: Sign an act
+      description: |
+        Signing is parallel: the two parties sign independently, in no fixed
+        order, and the act moves to `signed` only once both signatures are
+        present (FR-32, UC-25).
+
+        A party may sign only for a delivery point it has access to, and only
+        once. A second attempt by the same party is a conflict, not a repeat.
+      operationId: signAct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignatureRequest'
+      responses:
+        '201':
+          description: Signature recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActSignature'
+        '403':
+          description: |
+            No access to this delivery point, or the caller's role may not sign
+            for the party named.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            This party has already signed, or the period is closed and signing is
+            no longer possible.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /acts/{actId}/disagreement:
+    parameters:
+      - $ref: '#/components/parameters/ActId'
+    post:
+      tags: [Acts]
+      summary: Refuse to sign
+      description: |
+        Records that a party disputes the figures and moves the act to
+        `disagreement` (UC-25, alternative scenario). The protocol of
+        disagreement itself is drawn up outside the system, which is a deliberate
+        boundary of the MVP.
+      operationId: raiseDisagreement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferAct'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The act is already signed by both parties
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /corrective-acts:
+    get:
+      tags: [Acts]
+      summary: List corrective acts
+      operationId: listCorrectiveActs
+      parameters:
+        - name: original_act_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Corrective acts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CorrectiveAct'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Acts]
+      summary: Produce a corrective act
+      description: |
+        For refinements that arrived after the period closed (FR-18, UC-09). A
+        separate document linked to the original, which it does not modify
+        (ADR-002).
+
+        Where the discrepancy exceeds the contractual threshold the act is marked
+        as requiring agreement between the parties.
+      operationId: createCorrectiveAct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CorrectiveActRequest'
+      responses:
+        '201':
+          description: Corrective act produced
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CorrectiveAct'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The original act is not signed, so there is nothing to correct
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /reconciliations:
+    post:
+      tags: [Reconciliation]
+      summary: Compare the counterparty's figures against the operator's
+      description: |
+        Serves both sides: the engineer uploading the counterparty's file
+        (UC-10) and the counterparty uploading its own (UC-12). Discrepancies
+        beyond the contractual tolerance are marked as material.
+      operationId: createReconciliation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconciliationRequest'
+          multipart/form-data:
+            schema:
+              type: object
+              required: [delivery_point_id, period_start, period_end, file]
+              properties:
+                delivery_point_id:
+                  type: string
+                  format: uuid
+                period_start:
+                  type: string
+                  format: date-time
+                period_end:
+                  type: string
+                  format: date-time
+                file:
+                  type: string
+                  format: binary
+                  description: CSV or XLSX in the agreed layout.
+      responses:
+        '201':
+          description: Comparison complete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reconciliation'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '415':
+          description: Unsupported file format
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /reconciliations/{reconciliationId}:
+    parameters:
+      - name: reconciliationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Reconciliation]
+      summary: Get a reconciliation result
+      operationId: getReconciliation
+      responses:
+        '200':
+          description: The result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reconciliation'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /financial-summary:
+    get:
+      tags: [Reporting and export]
+      summary: Financial summary of signed acts
+      description: |
+        For the finance systems (FR-23, UC-15). Unsigned acts falling in the
+        period are included and marked as such, rather than silently omitted.
+      operationId: getFinancialSummary
+      parameters:
+        - $ref: '#/components/parameters/PeriodStart'
+        - $ref: '#/components/parameters/PeriodEnd'
+        - $ref: '#/components/parameters/DeliveryPointFilter'
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, csv]
+            default: json
+      responses:
+        '200':
+          description: The summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinancialSummary'
+            text/csv:
+              schema:
+                type: string
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /exports/regulator:
+    post:
+      tags: [Reporting and export]
+      summary: Request an audit export
+      description: |
+        The full data set for a period: raw measurements, corrected volumes, the
+        method versions applied, the adjustment journal and every act (FR-26,
+        UC-24).
+
+        Produced asynchronously, because the volume makes a synchronous response
+        impractical. The export itself is recorded — who asked for what, and when
+        — since that is auditable information in its own right.
+      operationId: requestRegulatorExport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegulatorExportRequest'
+      responses:
+        '202':
+          description: Export accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegulatorExport'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /exports/regulator/{exportId}:
+    parameters:
+      - name: exportId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Reporting and export]
+      summary: Export status and download link
+      operationId: getRegulatorExport
+      responses:
+        '200':
+          description: The export
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegulatorExport'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /users:
+    get:
+      tags: [Administration]
+      summary: List users
+      operationId: listUsers
+      parameters:
+        - name: role
+          in: query
+          schema:
+            $ref: '#/components/schemas/RoleName'
+        - name: is_blocked
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Administration]
+      summary: Create a user
+      description: |
+        Creates the account and sends an invitation (FR-28, UC-16). A counterparty
+        representative must be bound to a delivery point, which is what NFR-12
+        rests on.
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: That login already exists
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /users/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Administration]
+      summary: Block, unblock or amend a user
+      description: |
+        Blocking ends the user's active sessions immediately (UC-17).
+      operationId: updateUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPatch'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /method-versions:
+    get:
+      tags: [Administration]
+      summary: List method versions
+      description: |
+        Exactly one version is in force at any moment; `active_to` is null on
+        that one (FR-11, ADR-003).
+      operationId: listMethodVersions
+      responses:
+        '200':
+          description: Versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MethodVersion'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Administration]
+      summary: Add a method version
+      description: |
+        A new version closes the current one from the date it takes effect.
+        Editing a version already created is forbidden, because past calculations
+        must stay reproducible (FR-30, UC-19).
+      operationId: createMethodVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MethodVersionRequest'
+      responses:
+        '201':
+          description: Version added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MethodVersion'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The effective date overlaps an existing version
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /audit-log:
+    get:
+      tags: [Administration]
+      summary: The audit journal of user actions
+      description: |
+        Sign-ins, views, exports and refusals (FR-29, UC-18). With no filters it
+        returns the last 24 hours.
+      operationId: listAuditLog
+      parameters:
+        - name: user_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: action_type
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/PeriodStart'
+        - $ref: '#/components/parameters/PeriodEnd'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Journal entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditLogEntry'
+                  total:
+                    type: integer
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /communication-channels:
+    get:
+      tags: [Operations]
+      summary: State of the communication channels
+      description: |
+        The operations dashboard (FR-31, UC-20): per channel status, delivery
+        latency and packet loss. Latency is what NFR-7 is measured against.
+      operationId: listCommunicationChannels
+      parameters:
+        - $ref: '#/components/parameters/NodeFilter'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ChannelStatus'
+      responses:
+        '200':
+          description: Channels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CommunicationChannel'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /maintenance-events:
+    post:
+      tags: [Operations]
+      summary: Record a maintenance event
+      description: |
+        Instrument replacement, calibration, or manual entry of readings during
+        an incident (FR-25). This is what lets a gap in the measurements be
+        explained rather than merely observed.
+      operationId: createMaintenanceEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MaintenanceEventRequest'
+      responses:
+        '201':
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaintenanceEvent'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    NodeId:
+      name: nodeId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DeliveryPointId:
+      name: deliveryPointId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DeviationId:
+      name: deviationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ActId:
+      name: actId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PeriodId:
+      name: periodId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    NodeFilter:
+      name: node_id
+      in: query
+      schema:
+        type: string
+        format: uuid
+    DeliveryPointFilter:
+      name: delivery_point_id
+      in: query
+      schema:
+        type: string
+        format: uuid
+    PeriodStart:
+      name: period_start
+      in: query
+      schema:
+        type: string
+        format: date-time
+    PeriodEnd:
+      name: period_end
+      in: query
+      schema:
+        type: string
+        format: date-time
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 100
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      description: |
+        Carried through every service and both brokers, so one search
+        reconstructs the whole path of a measurement. Generated if absent.
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: Not authenticated
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: |
+        The caller's role, or its delivery point binding, does not permit this
+        (NFR-12). The attempt is recorded in the audit journal.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: No such object, or it is not visible to the caller
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ValidationFailed:
+      description: The request is well formed but its contents are not valid
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+  schemas:
+
+    Problem:
+      type: object
+      description: Error payload, after RFC 7807.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        errors:
+          type: array
+          description: Field-level detail, where the failure is a validation one.
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+    DataLayer:
+      type: string
+      description: |
+        Which layer the figures come from. Present on every response that carries
+        measured or calculated volumes, so no figure can be read out of context
+        (FR-05).
+      enum: [operational, accounting]
+
+    MeteringNode:
+      type: object
+      required: [id, code, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          example: PIRG-01
+        name:
+          type: string
+        location:
+          type: string
+        line_name:
+          type: string
+          description: Metering and monitoring are kept per pipeline line.
+        is_active:
+          type: boolean
+
+    NodeStatus:
+      type: object
+      required: [node_id, connection_state, last_measurement_at]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+        connection_state:
+          type: string
+          enum: [connected, lost]
+        last_measurement_at:
+          type: string
+          format: date-time
+          description: When the last trustworthy reading was taken.
+        last_measured_value:
+          type: number
+          description: |
+            Shown as a constant while the connection is lost. Never interpolated
+            or extrapolated (FR-14).
+        no_data_since:
+          type: string
+          format: date-time
+          nullable: true
+        archive_backfill_state:
+          type: string
+          description: State of the controller archive re-read after an outage (FR-16).
+          enum: [not_required, in_progress, completed, partial]
+
+    Measurement:
+      type: object
+      required: [id, node_id, measured_at, volume_raw, pressure, temperature, quality]
+      properties:
+        id:
+          type: string
+          format: uuid
+        node_id:
+          type: string
+          format: uuid
+        measured_at:
+          type: string
+          format: date-time
+        volume_raw:
+          type: number
+          description: Flow at operating conditions, in cubic metres per hour.
+        pressure:
+          type: number
+          description: Absolute pressure, in kilopascals.
+        temperature:
+          type: number
+          description: Degrees Celsius.
+        quality:
+          type: string
+          enum: [valid, suspect]
+          description: |
+            A reading marked suspect failed validation and is excluded from
+            accounting calculations until reviewed (FR-08).
+        reject_reason:
+          type: string
+          nullable: true
+        source:
+          type: string
+          enum: [telemetry, archive]
+          description: |
+            `archive` means the reading came from a controller archive re-read
+            after an outage.
+        packet_id:
+          type: string
+          format: uuid
+        received_at:
+          type: string
+          format: date-time
+
+    MeasurementBatch:
+      type: object
+      description: One telemetry packet.
+      required: [measurements]
+      properties:
+        packet_id:
+          type: string
+          format: uuid
+          description: Generated if absent.
+        measurements:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            type: object
+            required: [node_code, measured_at, volume_raw, pressure, temperature]
+            properties:
+              node_code:
+                type: string
+              measured_at:
+                type: string
+                format: date-time
+              volume_raw:
+                type: number
+                minimum: 0
+              pressure:
+                type: number
+                exclusiveMinimum: true
+                minimum: 0
+              temperature:
+                type: number
+              source:
+                type: string
+                enum: [telemetry, archive]
+                default: telemetry
+
+    IntakeResult:
+      type: object
+      required: [accepted, duplicates]
+      properties:
+        accepted:
+          type: integer
+        duplicates:
+          type: integer
+          description: |
+            Readings already held for that node and time. Expected during an
+            archive re-read and not an error (FR-16, NFR-6).
+        suspect:
+          type: integer
+          description: Stored but excluded from calculations (FR-08).
+
+    HourlyAggregate:
+      type: object
+      required: [node_id, hour_start, avg_volume, measurement_count, is_complete]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+        hour_start:
+          type: string
+          format: date-time
+        avg_volume:
+          type: number
+          description: Mean of the raw readings in the hour.
+        avg_pressure:
+          type: number
+        avg_temperature:
+          type: number
+        measurement_count:
+          type: integer
+        is_complete:
+          type: boolean
+        computed_at:
+          type: string
+          format: date-time
+
+    GasComposition:
+      type: object
+      required: [id, node_id, sampling_time, composition, is_active]
+      properties:
+        id:
+          type: string
+          format: uuid
+        node_id:
+          type: string
+          format: uuid
+        sampling_time:
+          type: string
+          format: date-time
+        received_at:
+          type: string
+          format: date-time
+        lab_identifier:
+          type: string
+        composition:
+          $ref: '#/components/schemas/CompositionComponents'
+        is_active:
+          type: boolean
+          description: |
+            False once a refined analysis for the same sampling period arrives.
+            The superseded record stays readable.
+        requires_corrective_act:
+          type: boolean
+          description: Set when the sampling period was already closed (ADR-002).
+
+    CompositionComponents:
+      type: object
+      description: |
+        Mole percent per component. The values must sum to 100 within the
+        tolerance of the analysis.
+      additionalProperties:
+        type: number
+      example:
+        methane: 96.1
+        ethane: 1.8
+        propane: 0.4
+        nitrogen: 1.1
+        carbon_dioxide: 0.6
+
+    GasCompositionRequest:
+      type: object
+      required: [node_id, sampling_time, lab_identifier, composition]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+        sampling_time:
+          type: string
+          format: date-time
+        lab_identifier:
+          type: string
+        composition:
+          $ref: '#/components/schemas/CompositionComponents'
+
+    MethodVersion:
+      type: object
+      required: [id, method_name, version_number, active_from]
+      properties:
+        id:
+          type: string
+          format: uuid
+        method_name:
+          type: string
+        version_number:
+          type: string
+        active_from:
+          type: string
+          format: date-time
+        active_to:
+          type: string
+          format: date-time
+          nullable: true
+          description: Null on the version currently in force.
+        coefficients:
+          type: object
+          additionalProperties: true
+
+    MethodVersionRequest:
+      type: object
+      required: [method_name, version_number, active_from, coefficients]
+      properties:
+        method_name:
+          type: string
+        version_number:
+          type: string
+        active_from:
+          type: string
+          format: date-time
+        coefficients:
+          type: object
+          additionalProperties: true
+
+    AccountingValue:
+      type: object
+      required: [id, standardized_volume, method_version_id, version_number, is_current]
+      properties:
+        id:
+          type: string
+          format: uuid
+        hourly_aggregate_id:
+          type: string
+          format: uuid
+        gas_composition_id:
+          type: string
+          format: uuid
+        method_version_id:
+          type: string
+          format: uuid
+          description: The version applied, stored so the result can be reproduced (FR-11).
+        standardized_volume:
+          type: number
+          description: Cubic metres at standard conditions, 20 °C and 101.325 kPa.
+        is_calculated:
+          type: boolean
+          description: |
+            True where the volume was substituted by calculation because
+            measurements were missing (FR-15). The counterparty's signal to
+            challenge.
+        calculation_method:
+          type: string
+          nullable: true
+          description: The substitution method, where is_calculated is true.
+        version_number:
+          type: integer
+        is_current:
+          type: boolean
+        calculated_at:
+          type: string
+          format: date-time
+        correction_reason:
+          type: string
+          nullable: true
+
+    RecalculationRequest:
+      type: object
+      required: [node_id, period_start, period_end, reason]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        reason:
+          type: string
+          description: Recorded in the adjustment journal (FR-13).
+
+    RecalculationResult:
+      type: object
+      properties:
+        values_created:
+          type: integer
+        adjustment_entries_created:
+          type: integer
+
+    AdjustmentLogEntry:
+      type: object
+      required: [id, accounting_value_id, changed_at, previous_value, new_value, reason]
+      properties:
+        id:
+          type: string
+          format: uuid
+        accounting_value_id:
+          type: string
+          format: uuid
+        changed_by:
+          $ref: '#/components/schemas/UserRef'
+        action_type:
+          type: string
+          enum: [calculation, manual_correction, calculated_substitution]
+        previous_value:
+          type: number
+          nullable: true
+        new_value:
+          type: number
+        changed_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+
+    DeliveryPoint:
+      type: object
+      required: [id, code, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        counterparty_name:
+          type: string
+        contract_number:
+          type: string
+
+    ContractParameter:
+      type: object
+      required: [id, delivery_point_id, valid_from, daily_nomination, deviation_threshold]
+      properties:
+        id:
+          type: string
+          format: uuid
+        delivery_point_id:
+          type: string
+          format: uuid
+        valid_from:
+          type: string
+          format: date-time
+        valid_to:
+          type: string
+          format: date-time
+          nullable: true
+          description: Null on the version currently in force.
+        daily_nomination:
+          type: number
+          description: Planned volume for a gas day, which runs 10:00 to 10:00.
+        deviation_threshold:
+          type: number
+          description: |
+            Materiality threshold as a percentage, for the instantaneous
+            comparison that raises the dispatcher's alarm.
+        accumulated_deviation_threshold:
+          type: number
+          description: |
+            Threshold for the volume accumulated since the start of the gas day,
+            which is what triggers the counterparty notification.
+
+    NominationStatus:
+      type: object
+      required: [delivery_point_id, gas_day, layer, planned_volume, actual_volume]
+      properties:
+        delivery_point_id:
+          type: string
+          format: uuid
+        gas_day:
+          type: string
+          format: date
+        layer:
+          $ref: '#/components/schemas/DataLayer'
+        planned_volume:
+          type: number
+        planned_to_date:
+          type: number
+          description: The plan pro-rated to this point in the gas day.
+        actual_volume:
+          type: number
+          description: Accumulated since the start of the gas day.
+        current_flow:
+          type: number
+        deviation_percent:
+          type: number
+        within_corridor:
+          type: boolean
+        series:
+          type: array
+          description: The time series behind the dispatcher's chart.
+          items:
+            type: object
+            properties:
+              at:
+                type: string
+                format: date-time
+              flow:
+                type: number
+                nullable: true
+              data_missing:
+                type: boolean
+                description: True across a stretch with no measurements (FR-14).
+
+    DeviationStatus:
+      type: string
+      enum: [open, acknowledged, resolved]
+
+    Deviation:
+      type: object
+      required: [id, node_id, delivery_point_id, detected_at, actual_value, threshold_value, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        node_id:
+          type: string
+          format: uuid
+        delivery_point_id:
+          type: string
+          format: uuid
+          description: |
+            Held explicitly rather than derived: the link between node and
+            delivery point is many-to-many.
+        contract_parameter_id:
+          type: string
+          format: uuid
+          description: |
+            The parameter version this deviation was judged against. Without it a
+            later change of nomination would make the record unexplainable.
+        kind:
+          type: string
+          enum: [instantaneous, accumulated]
+        detected_at:
+          type: string
+          format: date-time
+        measured_at:
+          type: string
+          format: date-time
+        actual_value:
+          type: number
+        threshold_value:
+          type: number
+        deviation_value:
+          type: number
+        severity_level:
+          type: string
+          enum: [warning, material]
+        status:
+          $ref: '#/components/schemas/DeviationStatus'
+        acknowledged_by:
+          $ref: '#/components/schemas/UserRef'
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Notification:
+      type: object
+      required: [id, deviation_id, channel, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        deviation_id:
+          type: string
+          format: uuid
+        channel:
+          type: string
+          enum: [email, sms, api]
+        recipient:
+          type: string
+        status:
+          type: string
+          enum: [pending, sent, failed, dead]
+          description: |
+            `dead` means the retry budget was exhausted and the message was left
+            for manual handling rather than dropped.
+        attempts:
+          type: integer
+        sent_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_error:
+          type: string
+          nullable: true
+        external_ref:
+          type: string
+          nullable: true
+          description: The identifier returned by the delivery gateway.
+
+    ReportingPeriodStatus:
+      type: string
+      enum: [open, calculating, ready_for_act, closed]
+
+    ReportingPeriod:
+      type: object
+      required: [id, delivery_point_id, period_start, period_end, closure_deadline, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        delivery_point_id:
+          type: string
+          format: uuid
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        closure_deadline:
+          type: string
+          format: date-time
+          description: T + 10 working days from the end of the period (FR-17).
+        status:
+          $ref: '#/components/schemas/ReportingPeriodStatus'
+
+    PeriodReadiness:
+      type: object
+      required: [period_id, ready_to_calculate, inputs]
+      properties:
+        period_id:
+          type: string
+          format: uuid
+        ready_to_calculate:
+          type: boolean
+        expected_calculation_at:
+          type: string
+          format: date-time
+          nullable: true
+        inputs:
+          type: array
+          items:
+            type: object
+            required: [input, state]
+            properties:
+              input:
+                type: string
+                enum: [telemetry, gas_composition, method_version]
+              state:
+                type: string
+                enum: [received, awaited, partially_lost, not_assigned]
+              expected_at:
+                type: string
+                format: date-time
+                nullable: true
+              note:
+                type: string
+
+    ActStatus:
+      type: string
+      enum: [draft, ready_for_signing, signed, disagreement, closed]
+
+    TransferAct:
+      type: object
+      required: [id, reporting_period_id, delivery_point_id, status, generated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        act_number:
+          type: string
+        reporting_period_id:
+          type: string
+          format: uuid
+        delivery_point_id:
+          type: string
+          format: uuid
+        generated_by:
+          $ref: '#/components/schemas/UserRef'
+        generated_at:
+          type: string
+          format: date-time
+        pdf_link:
+          type: string
+          format: uri
+        status:
+          $ref: '#/components/schemas/ActStatus'
+        total_standardized_volume:
+          type: number
+        has_calculated_periods:
+          type: boolean
+          description: True where any stretch was substituted by calculation (FR-15).
+
+    TransferActDetail:
+      allOf:
+        - $ref: '#/components/schemas/TransferAct'
+        - type: object
+          properties:
+            lines:
+              type: array
+              items:
+                $ref: '#/components/schemas/ActLine'
+            signatures:
+              type: array
+              items:
+                $ref: '#/components/schemas/ActSignature'
+            quality:
+              type: object
+              description: Weighted average quality figures for the period.
+              additionalProperties:
+                type: number
+
+    ActLine:
+      type: object
+      required: [id, node_id, period_start, period_end, total_standardized_volume]
+      properties:
+        id:
+          type: string
+          format: uuid
+        node_id:
+          type: string
+          format: uuid
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        total_standardized_volume:
+          type: number
+        accounting_value_ids:
+          type: array
+          description: |
+            The values this line was built from, which is what makes the
+            calculation reproducible by an auditor (FR-27).
+          items:
+            type: string
+            format: uuid
+
+    ActRequest:
+      type: object
+      required: [reporting_period_id]
+      properties:
+        reporting_period_id:
+          type: string
+          format: uuid
+        allow_incomplete:
+          type: boolean
+          default: false
+          description: |
+            Produce the act even though parts of the period are not calculated,
+            with those stretches flagged.
+
+    ActSignature:
+      type: object
+      required: [id, act_id, party, signed_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        act_id:
+          type: string
+          format: uuid
+        party:
+          type: string
+          enum: [operator, counterparty]
+        signed_by:
+          $ref: '#/components/schemas/UserRef'
+        signed_at:
+          type: string
+          format: date-time
+
+    SignatureRequest:
+      type: object
+      required: [party]
+      properties:
+        party:
+          type: string
+          enum: [operator, counterparty]
+
+    CorrectiveAct:
+      type: object
+      required: [id, original_act_id, reason, generated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        original_act_id:
+          type: string
+          format: uuid
+        reporting_period_id:
+          type: string
+          format: uuid
+        generated_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+        pdf_link:
+          type: string
+          format: uri
+        requires_agreement:
+          type: boolean
+          description: |
+            True where the discrepancy exceeds the contractual threshold, in
+            which case the simplified procedure does not apply.
+        corrections:
+          type: array
+          items:
+            type: object
+            properties:
+              node_id:
+                type: string
+                format: uuid
+              previous_value:
+                type: number
+              new_value:
+                type: number
+
+    CorrectiveActRequest:
+      type: object
+      required: [original_act_id, reason]
+      properties:
+        original_act_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+
+    ReconciliationRequest:
+      type: object
+      required: [delivery_point_id, period_start, period_end, counterparty_values]
+      properties:
+        delivery_point_id:
+          type: string
+          format: uuid
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        counterparty_values:
+          type: array
+          items:
+            type: object
+            required: [node_id, period_start, period_end, standardized_volume]
+            properties:
+              node_id:
+                type: string
+                format: uuid
+              period_start:
+                type: string
+                format: date-time
+              period_end:
+                type: string
+                format: date-time
+              standardized_volume:
+                type: number
+
+    Reconciliation:
+      type: object
+      required: [id, delivery_point_id, uploaded_at, has_material_discrepancies]
+      properties:
+        id:
+          type: string
+          format: uuid
+        delivery_point_id:
+          type: string
+          format: uuid
+        uploaded_at:
+          type: string
+          format: date-time
+        has_material_discrepancies:
+          type: boolean
+        discrepancies:
+          type: array
+          items:
+            type: object
+            properties:
+              node_id:
+                type: string
+                format: uuid
+              operator_value:
+                type: number
+              counterparty_value:
+                type: number
+              difference_percent:
+                type: number
+              is_material:
+                type: boolean
+                description: Beyond the contractual tolerance.
+              probable_cause:
+                type: string
+                nullable: true
+
+    FinancialSummary:
+      type: object
+      required: [period_start, period_end, lines]
+      properties:
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              act_id:
+                type: string
+                format: uuid
+              act_number:
+                type: string
+              delivery_point_id:
+                type: string
+                format: uuid
+              total_standardized_volume:
+                type: number
+              signed_at:
+                type: string
+                format: date-time
+                nullable: true
+              is_signed:
+                type: boolean
+              quality:
+                type: object
+                additionalProperties:
+                  type: number
+
+    RegulatorExportRequest:
+      type: object
+      required: [period_start, period_end]
+      properties:
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        node_ids:
+          type: array
+          description: All nodes when omitted.
+          items:
+            type: string
+            format: uuid
+        format:
+          type: string
+          enum: [json, xml, csv]
+          default: json
+
+    RegulatorExport:
+      type: object
+      required: [id, status, period_start, period_end]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [accepted, in_progress, completed, partial, failed]
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        exported_at:
+          type: string
+          format: date-time
+          nullable: true
+        archive_link:
+          type: string
+          format: uri
+          nullable: true
+        incomplete_periods:
+          type: array
+          description: |
+            Stretches not fully calculated at the time of export, exported as far
+            as they go and marked.
+          items:
+            type: object
+            properties:
+              node_id:
+                type: string
+                format: uuid
+              period_start:
+                type: string
+                format: date-time
+              period_end:
+                type: string
+                format: date-time
+
+    RoleName:
+      type: string
+      enum:
+        - dispatcher
+        - accounting_engineer
+        - counterparty_representative
+        - financial_controller
+        - administrator
+        - it_operations
+        - laboratory_technician
+        - regulator
+
+    UserRef:
+      type: object
+      description: A user as referenced from another object.
+      properties:
+        id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+
+    User:
+      type: object
+      required: [id, login, full_name, role]
+      properties:
+        id:
+          type: string
+          format: uuid
+        login:
+          type: string
+        full_name:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        role:
+          $ref: '#/components/schemas/RoleName'
+        delivery_point_ids:
+          type: array
+          description: |
+            Required for a counterparty representative, and what its access is
+            scoped to (NFR-12).
+          items:
+            type: string
+            format: uuid
+        is_blocked:
+          type: boolean
+
+    UserRequest:
+      type: object
+      required: [login, full_name, email, role]
+      properties:
+        login:
+          type: string
+        full_name:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        role:
+          $ref: '#/components/schemas/RoleName'
+        delivery_point_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    UserPatch:
+      type: object
+      properties:
+        is_blocked:
+          type: boolean
+        full_name:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        delivery_point_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    AuditLogEntry:
+      type: object
+      required: [id, action_type, timestamp, result]
+      properties:
+        id:
+          type: string
+          format: uuid
+        user:
+          $ref: '#/components/schemas/UserRef'
+        action_type:
+          type: string
+        object_type:
+          type: string
+        object_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        ip_address:
+          type: string
+        result:
+          type: string
+          enum: [success, refused, error]
+          description: |
+            Refused attempts are recorded too, so a sequence of them is visible
+            as such.
+        details:
+          type: object
+          additionalProperties: true
+
+    ChannelStatus:
+      type: string
+      enum: [up, degraded, down]
+
+    CommunicationChannel:
+      type: object
+      required: [id, node_id, channel_type, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        node_id:
+          type: string
+          format: uuid
+        channel_type:
+          type: string
+          enum: [primary, backup]
+        is_active:
+          type: boolean
+        status:
+          $ref: '#/components/schemas/ChannelStatus'
+        latency_ms:
+          type: integer
+        packet_loss_percent:
+          type: number
+        last_updated:
+          type: string
+          format: date-time
+
+    MaintenanceEvent:
+      type: object
+      required: [id, node_id, event_type, occurred_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        node_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+          enum: [instrument_replacement, calibration, manual_reading, other]
+        occurred_at:
+          type: string
+          format: date-time
+        recorded_by:
+          $ref: '#/components/schemas/UserRef'
+        comment:
+          type: string
+
+    MaintenanceEventRequest:
+      type: object
+      required: [node_id, event_type, occurred_at]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+          enum: [instrument_replacement, calibration, manual_reading, other]
+        occurred_at:
+          type: string
+          format: date-time
+        comment:
+          type: string
+
+    LoginRequest:
+      type: object
+      required: [login, password]
+      properties:
+        login:
+          type: string
+        password:
+          type: string
+          format: password
+
+    LoginResponse:
+      type: object
+      required: [access_token, expires_in, user]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          default: Bearer
+        expires_in:
+          type: integer
+        user:
+          $ref: '#/components/schemas/User'
