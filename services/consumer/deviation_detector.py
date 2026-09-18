@@ -1,35 +1,47 @@
 """Deviation detection consumer.
 
-Compares incoming measurements against the daily nomination (FR-07) and, when
-the accumulated deviation crosses the contractual threshold, queues a
+Compares incoming measurements against the contractual nomination (FR-07) and,
+when the accumulated deviation crosses the agreed threshold, queues a
 counterparty notification (FR-22, NFR-5) through the transactional outbox.
 
-Two comparisons are made, per UC-01: the instantaneous flow rate against the
-hourly share of the plan, and the volume accumulated since the start of the gas
-day against the plan pro-rated to the current moment.
+Two comparisons are made, per UC-01: the instantaneous flow against the hourly
+share of the plan, and the volume accumulated since the start of the gas day
+against the plan pro-rated to the current moment.
+
+The planned value is never stored on the deviation. The row records which
+ContractParameter version it was judged against, and the plan is derived from
+that, so the two cannot drift apart when a nomination changes.
 """
 
 import json
 import logging
 import os
 import signal
+import sys
+import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from confluent_kafka import Consumer, KafkaError
+from confluent_kafka import Consumer, KafkaError, TopicPartition
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from poison import PoisonHandler  # noqa: E402
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://gas:gas@127.0.0.1:5434/gas_metering"
 )
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "localhost:29092")
 TOPIC = os.getenv("TOPIC", "measurements.recorded")
+DLT_TOPIC = os.getenv("DLT_TOPIC", "measurements.dlt")
 GROUP_ID = os.getenv("GROUP_ID", "deviation-detector")
 CONSUMER_NAME = "deviation-detector"
 
 # Gas day runs 10:00 to 10:00 UTC, not midnight to midnight (see glossary).
 GAS_DAY_START_HOUR = 10
+RETRY_DELAY = 2.0
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(CONSUMER_NAME)
@@ -47,6 +59,13 @@ signal.signal(signal.SIGINT, stop)
 signal.signal(signal.SIGTERM, stop)
 
 
+def correlation_of(msg) -> str:
+    for name, value in msg.headers() or []:
+        if name == "correlation_id" and value:
+            return value.decode()
+    return "-"
+
+
 def gas_day_bounds(measured_at: datetime) -> tuple[datetime, datetime]:
     """Return the start and end of the gas day containing measured_at."""
     start = measured_at.replace(
@@ -57,23 +76,35 @@ def gas_day_bounds(measured_at: datetime) -> tuple[datetime, datetime]:
     return start, start + timedelta(days=1)
 
 
-def find_nomination(conn, node_id: str, gas_day_start: datetime):
+def find_contract_parameter(conn, node_id: str, at: datetime):
+    """The contract parameters in force for this node at this moment.
+
+    Validity is an interval, so a nomination that changed mid-period does not
+    retroactively re-judge earlier measurements.
+    """
     return conn.execute(
         """
-        SELECT n.id, n.delivery_point_id, n.planned_volume,
-               n.threshold_pct, n.accumulated_threshold_pct
-        FROM nomination n
-        JOIN node_delivery_link l ON l.delivery_point_id = n.delivery_point_id
-        WHERE l.node_id = %s AND n.gas_day = %s::date
+        SELECT cp.id, cp.delivery_point_id, cp.daily_nomination,
+               cp.deviation_threshold, cp.accumulated_deviation_threshold
+        FROM contract_parameter cp
+        JOIN node_delivery_link l ON l.delivery_point_id = cp.delivery_point_id
+        WHERE l.node_id = %s
+          AND cp.valid_from <= %s
+          AND (cp.valid_to IS NULL OR cp.valid_to > %s)
         """,
-        (node_id, gas_day_start.date()),
+        (node_id, at, at),
     ).fetchone()
 
 
 def accumulated_volume(conn, node_id: str, start: datetime, until: datetime) -> float:
+    """Volume delivered since the start of the gas day.
+
+    Readings are instantaneous flow per hour taken once a minute, so each
+    contributes a sixtieth of an hour's worth.
+    """
     row = conn.execute(
         """
-        SELECT coalesce(sum(flow_rate), 0) / 60 AS volume
+        SELECT coalesce(sum(volume_raw), 0) / 60 AS volume
         FROM measurement
         WHERE node_id = %s
           AND quality = 'valid'
@@ -101,43 +132,42 @@ def has_open_accumulated_deviation(conn, delivery_point_id, start, end) -> bool:
 
 
 def record_deviation(
-    conn, kind, node_id, nomination, measured_at, planned, actual, correlation_id
+    conn, kind, node_id, parameter, measured_at, planned, actual, correlation_id
 ):
     deviation_id = uuid4()
-    deviation_pct = (actual - planned) / planned * 100 if planned else 0
+    deviation_value = (actual - planned) / planned * 100 if planned else 0
     threshold = (
-        nomination["threshold_pct"]
+        parameter["deviation_threshold"]
         if kind == "instantaneous"
-        else nomination["accumulated_threshold_pct"]
+        else parameter["accumulated_deviation_threshold"]
     )
 
     conn.execute(
         """
         INSERT INTO deviation (
-            id, node_id, delivery_point_id, measured_at,
-            nominated_value, actual_value, deviation_pct, threshold_pct, kind,
-            correlation_id
+            id, node_id, delivery_point_id, contract_parameter_id, measured_at,
+            actual_value, deviation_value, threshold_value, kind, correlation_id
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             deviation_id,
             node_id,
-            nomination["delivery_point_id"],
+            parameter["delivery_point_id"],
+            parameter["id"],
             measured_at,
-            planned,
             actual,
-            deviation_pct,
+            deviation_value,
             threshold,
             kind,
             correlation_id,
         ),
     )
-    return deviation_id, deviation_pct
+    return deviation_id, deviation_value
 
 
 def queue_notification(
-    conn, deviation_id, nomination, deviation_pct, measured_at, correlation_id
+    conn, deviation_id, parameter, deviation_value, measured_at, correlation_id
 ):
     """Write the notification command to the outbox in the same transaction.
 
@@ -149,7 +179,7 @@ def queue_notification(
         SELECT code, counterparty_name, notify_channel, notify_address
         FROM delivery_point WHERE id = %s
         """,
-        (nomination["delivery_point_id"],),
+        (parameter["delivery_point_id"],),
     ).fetchone()
 
     payload = {
@@ -158,7 +188,7 @@ def queue_notification(
         "counterparty": point["counterparty_name"],
         "channel": point["notify_channel"],
         "address": point["notify_address"],
-        "deviation_pct": round(deviation_pct, 2),
+        "deviation_value": round(deviation_value, 2),
         "detected_at": datetime.now(timezone.utc).isoformat(),
         "measured_at": measured_at,
     }
@@ -175,7 +205,7 @@ def queue_notification(
             "deviation",
             deviation_id,
             "notification.send",
-            str(nomination["delivery_point_id"]),
+            str(parameter["delivery_point_id"]),
             "notification.send",
             "rabbitmq",
             json.dumps(payload),
@@ -183,12 +213,6 @@ def queue_notification(
         ),
     )
 
-def correlation_of(msg) -> str:
-    """Pull the correlation id out of the Kafka headers."""
-    for name, value in msg.headers() or []:
-        if name == "correlation_id" and value:
-            return value.decode()
-    return "-"
 
 def handle(conn, event: dict, correlation_id: str) -> None:
     message_key = event["measurement_id"]
@@ -210,21 +234,21 @@ def handle(conn, event: dict, correlation_id: str) -> None:
     measured_at = datetime.fromisoformat(event["measured_at"])
     start, end = gas_day_bounds(measured_at)
 
-    nomination = find_nomination(conn, node_id, start)
-    if nomination is None:
-        log.warning("no nomination for node %s on gas day %s", node_id, start.date())
+    parameter = find_contract_parameter(conn, node_id, measured_at)
+    if parameter is None:
+        log.warning("no contract parameters for node %s at %s", node_id, measured_at)
         return
 
-    planned_total = float(nomination["planned_volume"])
+    planned_total = float(parameter["daily_nomination"])
 
-    # Instantaneous: flow rate against the hourly share of the daily plan.
+    # Instantaneous: flow against the hourly share of the daily plan.
     planned_hourly = planned_total / 24
-    actual_rate = float(event["flow_rate"])
+    actual_rate = float(event["volume_raw"])
     instant_pct = abs(actual_rate - planned_hourly) / planned_hourly * 100
 
-    if instant_pct > float(nomination["threshold_pct"]):
+    if instant_pct > float(parameter["deviation_threshold"]):
         record_deviation(
-            conn, "instantaneous", node_id, nomination,
+            conn, "instantaneous", node_id, parameter,
             measured_at, planned_hourly, actual_rate, correlation_id,
         )
         log.info("instantaneous deviation %.2f%% on node %s", instant_pct, node_id)
@@ -240,23 +264,23 @@ def handle(conn, event: dict, correlation_id: str) -> None:
     actual_so_far = accumulated_volume(conn, node_id, start, measured_at)
     accumulated_pct = abs(actual_so_far - planned_so_far) / planned_so_far * 100
 
-    if accumulated_pct <= float(nomination["accumulated_threshold_pct"]):
+    if accumulated_pct <= float(parameter["accumulated_deviation_threshold"]):
         return
 
     # One notification per open deviation: without this the counterparty gets a
     # message on every measurement while the flow hovers around the threshold.
-    if has_open_accumulated_deviation(conn, nomination["delivery_point_id"], start, end):
+    if has_open_accumulated_deviation(conn, parameter["delivery_point_id"], start, end):
         log.info("accumulated deviation already open, no new notification")
         return
 
-    deviation_id, pct = record_deviation(
-        conn, "accumulated", node_id, nomination,
+    deviation_id, value = record_deviation(
+        conn, "accumulated", node_id, parameter,
         measured_at, planned_so_far, actual_so_far, correlation_id,
     )
     queue_notification(
-        conn, deviation_id, nomination, pct, event["measured_at"], correlation_id
+        conn, deviation_id, parameter, value, event["measured_at"], correlation_id
     )
-    log.info("accumulated deviation %.2f%%, notification queued", pct)
+    log.info("accumulated deviation %.2f%%, notification queued", value)
 
 
 def main() -> None:
@@ -270,6 +294,7 @@ def main() -> None:
         }
     )
     consumer.subscribe([TOPIC])
+    poison = PoisonHandler(KAFKA_BOOTSTRAP, DLT_TOPIC, CONSUMER_NAME)
     log.info("consumer started, topic=%s group=%s", TOPIC, GROUP_ID)
 
     while running:
@@ -288,10 +313,22 @@ def main() -> None:
                 conn.row_factory = dict_row
                 with conn.transaction():
                     handle(conn, event, correlation_id)
+            poison.forget(msg)
             consumer.commit(msg)
-        except Exception:
-            log.exception("failed to handle offset %s, not committing", msg.offset())
+        except Exception as exc:
+            if poison.should_retry(msg):
+                log.warning(
+                    "failed to handle offset %s, will retry: %s", msg.offset(), exc
+                )
+                consumer.seek(
+                    TopicPartition(msg.topic(), msg.partition(), msg.offset())
+                )
+                time.sleep(RETRY_DELAY)
+                continue
+            poison.send_to_dlt(msg, str(exc))
+            consumer.commit(msg)
 
+    poison.close()
     consumer.close()
     pool.close()
     log.info("consumer stopped")

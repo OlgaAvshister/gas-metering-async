@@ -38,7 +38,7 @@ app = FastAPI(title="Gas metering intake API", lifespan=lifespan)
 class Measurement(BaseModel):
     node_code: str
     measured_at: datetime
-    flow_rate: float = Field(ge=0)
+    volume_raw: float = Field(ge=0)
     pressure: float = Field(gt=0)
     temperature: float
     source: Literal["telemetry", "archive"] = "telemetry"
@@ -46,6 +46,9 @@ class Measurement(BaseModel):
 
 class MeasurementBatch(BaseModel):
     measurements: list[Measurement] = Field(min_length=1, max_length=1000)
+    # One packet carries many readings. Recording it lets a packet rejected by
+    # validation be traced to every reading it brought (FR-08).
+    packet_id: str | None = None
 
 
 class IntakeResult(BaseModel):
@@ -57,6 +60,7 @@ class IntakeResult(BaseModel):
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
+
 @app.post("/measurements", response_model=IntakeResult)
 def ingest(
     batch: MeasurementBatch,
@@ -65,6 +69,8 @@ def ingest(
     # Honour a correlation id supplied by the caller so a chain that starts in
     # another system stays connected; otherwise start a new one here.
     correlation_id = x_correlation_id or str(uuid4())
+    packet_id = batch.packet_id or str(uuid4())
+
     codes = {m.node_code for m in batch.measurements}
 
     with pool.connection() as conn:
@@ -93,9 +99,10 @@ def ingest(
                     """
                     INSERT INTO measurement (
                         id, node_id, measured_at,
-                        flow_rate, pressure, temperature, source, correlation_id
+                        volume_raw, pressure, temperature, source,
+                        packet_id, correlation_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (node_id, measured_at) DO NOTHING
                     RETURNING id
                     """,
@@ -103,10 +110,11 @@ def ingest(
                         measurement_id,
                         node_id,
                         m.measured_at,
-                        m.flow_rate,
+                        m.volume_raw,
                         m.pressure,
                         m.temperature,
                         m.source,
+                        packet_id,
                         correlation_id,
                     ),
                 ).fetchone()
@@ -119,10 +127,11 @@ def ingest(
                     "node_id": str(node_id),
                     "node_code": m.node_code,
                     "measured_at": m.measured_at.isoformat(),
-                    "flow_rate": m.flow_rate,
+                    "volume_raw": m.volume_raw,
                     "pressure": m.pressure,
                     "temperature": m.temperature,
                     "source": m.source,
+                    "packet_id": packet_id,
                 }
 
                 conn.execute(

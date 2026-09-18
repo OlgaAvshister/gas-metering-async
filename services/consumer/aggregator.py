@@ -14,33 +14,35 @@ import logging
 import os
 import signal
 import sys
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import time
 
 from confluent_kafka import Consumer, KafkaError, TopicPartition
-from poison import PoisonHandler
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from poison import PoisonHandler  # noqa: E402
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://gas:gas@127.0.0.1:5434/gas_metering"
 )
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "localhost:29092")
 TOPIC = os.getenv("TOPIC", "measurements.recorded")
+DLT_TOPIC = os.getenv("DLT_TOPIC", "measurements.dlt")
 GROUP_ID = os.getenv("GROUP_ID", "hourly-aggregator")
 CONSUMER_NAME = "hourly-aggregator"
-# Pause between retries so a transient failure has time to clear.
-RETRY_DELAY = 2.0
-DLT_TOPIC = os.getenv("DLT_TOPIC", "measurements.dlt")
 
 # NFR-9: one measurement per minute, so a complete hour holds sixty of them.
 MEASUREMENTS_PER_HOUR = 60
+# Pause between retries so a transient failure has time to clear.
+RETRY_DELAY = 2.0
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
 )
+logging.getLogger("pika").setLevel(logging.WARNING)
 log = logging.getLogger(CONSUMER_NAME)
 
 running = True
@@ -54,6 +56,14 @@ def stop(signum, frame):
 
 signal.signal(signal.SIGINT, stop)
 signal.signal(signal.SIGTERM, stop)
+
+
+def correlation_of(msg) -> str:
+    """Pull the correlation id out of the Kafka headers."""
+    for name, value in msg.headers() or []:
+        if name == "correlation_id" and value:
+            return value.decode()
+    return "-"
 
 
 def already_processed(conn, message_key: str) -> bool:
@@ -70,18 +80,22 @@ def recompute_hour(conn, node_id: str, measured_at: str) -> None:
     Recomputing the whole hour rather than adding to a running total keeps the
     operation idempotent and lets late archive data (FR-16) correct an hour that
     was already published.
+
+    avg_volume is the mean of the raw readings, per the ER model. Summing and
+    dividing by a fixed sixty would under-report an hour that is still filling
+    up, or one with gaps left by an outage.
     """
     conn.execute(
         """
         INSERT INTO hourly_aggregate (
-            id, node_id, hour_start, volume,
+            id, node_id, hour_start, avg_volume,
             avg_pressure, avg_temperature, measurement_count, is_complete
         )
         SELECT
             gen_random_uuid(),
             m.node_id,
             date_trunc('hour', %(measured_at)s::timestamptz),
-            sum(m.flow_rate) / 60,
+            avg(m.volume_raw),
             avg(m.pressure),
             avg(m.temperature),
             count(*),
@@ -94,7 +108,7 @@ def recompute_hour(conn, node_id: str, measured_at: str) -> None:
                                + interval '1 hour'
         GROUP BY m.node_id
         ON CONFLICT (node_id, hour_start) DO UPDATE SET
-            volume            = excluded.volume,
+            avg_volume        = excluded.avg_volume,
             avg_pressure      = excluded.avg_pressure,
             avg_temperature   = excluded.avg_temperature,
             measurement_count = excluded.measurement_count,
@@ -108,12 +122,6 @@ def recompute_hour(conn, node_id: str, measured_at: str) -> None:
         },
     )
 
-def correlation_of(msg) -> str:
-    """Pull the correlation id out of the Kafka headers."""
-    for name, value in msg.headers() or []:
-        if name == "correlation_id" and value:
-            return value.decode()
-    return "-"
 
 def handle(conn, event: dict) -> bool:
     message_key = event["measurement_id"]
@@ -161,6 +169,7 @@ def main() -> None:
         try:
             event = json.loads(msg.value())
             correlation_id = correlation_of(msg)
+
             with pool.connection() as conn:
                 conn.row_factory = dict_row
                 with conn.transaction():
@@ -194,6 +203,7 @@ def main() -> None:
             # otherwise everything behind it stops too.
             poison.send_to_dlt(msg, str(exc))
             consumer.commit(msg)
+
     poison.close()
     consumer.close()
     pool.close()

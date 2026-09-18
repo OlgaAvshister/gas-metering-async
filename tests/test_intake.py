@@ -16,7 +16,7 @@ def insert_measurement(conn, measured_at=MEASURED_AT):
     row = conn.execute(
         """
         INSERT INTO measurement (
-            id, node_id, measured_at, flow_rate, pressure, temperature, source
+            id, node_id, measured_at, volume_raw, pressure, temperature, source
         )
         VALUES (%s, %s, %s, 1250.0, 55.0, 12.0, 'telemetry')
         ON CONFLICT (node_id, measured_at) DO NOTHING
@@ -79,3 +79,31 @@ def test_different_timestamps_are_separate_measurements(seeded):
         "SELECT count(*) AS n FROM measurement WHERE node_id = %s", (NODE_ID,)
     ).fetchone()
     assert measurements["n"] == 2
+
+
+def test_only_one_contract_parameter_is_in_force_per_delivery_point(seeded):
+    """The ER model states this but calls it unenforceable in the schema.
+
+    For a single open interval it is enforceable, and a partial unique index
+    does it — so a second open row is rejected by the database rather than by
+    whichever service happens to check.
+    """
+    import psycopg
+    import pytest
+
+    point_id = seeded.execute(
+        "SELECT id FROM delivery_point ORDER BY code LIMIT 1"
+    ).fetchone()["id"]
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        seeded.execute(
+            """
+            INSERT INTO contract_parameter (
+                id, delivery_point_id, valid_from, valid_to,
+                daily_nomination, deviation_threshold,
+                accumulated_deviation_threshold
+            )
+            VALUES (gen_random_uuid(), %s, now(), NULL, 30000, 5.00, 2.00)
+            """,
+            (point_id,),
+        )
