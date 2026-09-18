@@ -4,7 +4,12 @@
 interface and the external systems: the SCADA gateway, the laboratory
 information system and the counterparty's systems.
 
-37 paths, 43 operations, 52 schemas, validated against OpenAPI 3.0.3.
+39 paths, 44 operations, 53 schemas, validated against OpenAPI 3.0.3.
+
+Paths follow the names recorded in the [traceability
+matrix](../traceability.md), which is the surviving evidence of the original
+contract — `/audit-exports` rather than `/exports/regulator`,
+`/acts/{actId}/corrective-acts` rather than a top-level collection, and so on.
 
 ## Reading it
 

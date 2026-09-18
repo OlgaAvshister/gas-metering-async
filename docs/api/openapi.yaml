@@ -672,6 +672,9 @@ paths:
                   $ref: '#/components/schemas/TransferAct'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /reporting-periods/{periodId}/acts:
+    parameters:
+      - $ref: '#/components/parameters/PeriodId'
     post:
       tags: [Acts]
       summary: Produce a transfer act
@@ -855,17 +858,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
 
-  /corrective-acts:
+  /acts/{actId}/corrective-acts:
+    parameters:
+      - $ref: '#/components/parameters/ActId'
     get:
       tags: [Acts]
-      summary: List corrective acts
+      summary: Corrective acts against this act
       operationId: listCorrectiveActs
-      parameters:
-        - name: original_act_id
-          in: query
-          schema:
-            type: string
-            format: uuid
       responses:
         '200':
           description: Corrective acts
@@ -987,7 +986,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  /financial-summary:
+  /financial-summaries:
     get:
       tags: [Reporting and export]
       summary: Financial summary of signed acts
@@ -1018,7 +1017,7 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
-  /exports/regulator:
+  /audit-exports:
     post:
       tags: [Reporting and export]
       summary: Request an audit export
@@ -1049,7 +1048,7 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationFailed'
 
-  /exports/regulator/{exportId}:
+  /audit-exports/{exportId}:
     parameters:
       - name: exportId
         in: path
@@ -1276,6 +1275,44 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/CommunicationChannel'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /alerts:
+    get:
+      tags: [Operations]
+      summary: Operational alerts
+      description: |
+        Raised automatically on packet loss, on delivery delay beyond the
+        permitted figure, and on a storage integrity failure (FR-31, UC-21).
+
+        An alert withdrawn by the system — a backup channel came back on its own
+        — stays in the list with `status: withdrawn` rather than disappearing, so
+        that a recurring fault is visible as a pattern.
+      operationId: listAlerts
+      parameters:
+        - $ref: '#/components/parameters/NodeFilter'
+        - name: alert_type
+          in: query
+          schema:
+            type: string
+            enum: [packet_loss, delivery_delay, storage_integrity]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, acknowledged, withdrawn]
+        - $ref: '#/components/parameters/PeriodStart'
+        - $ref: '#/components/parameters/PeriodEnd'
+      responses:
+        '200':
+          description: Alerts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Alert'
         '403':
           $ref: '#/components/responses/Forbidden'
 
@@ -2221,13 +2258,11 @@ components:
 
     CorrectiveActRequest:
       type: object
-      required: [original_act_id, reason]
+      required: [reason]
       properties:
-        original_act_id:
-          type: string
-          format: uuid
         reason:
           type: string
+          description: Why the closed period needs correcting (FR-18, UC-09).
 
     ReconciliationRequest:
       type: object
@@ -2544,6 +2579,40 @@ components:
         last_updated:
           type: string
           format: date-time
+
+    Alert:
+      type: object
+      required: [id, alert_type, raised_at, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        alert_type:
+          type: string
+          enum: [packet_loss, delivery_delay, storage_integrity]
+        node_id:
+          type: string
+          format: uuid
+          nullable: true
+        channel_id:
+          type: string
+          format: uuid
+          nullable: true
+        raised_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [open, acknowledged, withdrawn]
+        probable_cause:
+          type: string
+        escalated_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Set when the alert went unacknowledged past its window and was
+            escalated (UC-21, alternative scenario).
 
     MaintenanceEvent:
       type: object
