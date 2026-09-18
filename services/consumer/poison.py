@@ -14,7 +14,6 @@ resets when the consumer restarts. A production system would keep it in the
 database or carry it in headers on republish.
 """
 
-import json
 import logging
 from collections import defaultdict
 

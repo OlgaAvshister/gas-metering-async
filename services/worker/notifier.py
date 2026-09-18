@@ -152,7 +152,7 @@ def main() -> None:
                 # send the message to the retry queue, not back here directly.
                 ch.basic_nack(method.delivery_tag, requeue=False)
             return
-
+        log.info("notification delivered cid=%s", correlation_id)
         mark_notification(pool, deviation_id, "sent", attempts)
         ch.basic_ack(method.delivery_tag)
 
