@@ -1,0 +1,32 @@
+@startuml uc-it-operations
+!pragma layout smetana
+left to right direction
+skinparam shadowing false
+skinparam usecase {
+  BackgroundColor #AEDCF0
+  BorderColor #3C7A99
+}
+
+title IT operations
+
+actor "IT operations" as ops
+
+rectangle System {
+  usecase "UC-20. Monitor the state of the\ncommunication channels" as UC20
+  usecase "UC-21. Receive an alert about\ndata loss" as UC21
+  usecase "UC-22. Recover data after a\nconnection outage" as UC22
+}
+
+ops -- UC20
+ops -- UC21
+ops -- UC22
+
+UC21 ..> UC22 : <<extend>>
+
+note bottom of UC22
+  The system re-reads the controller
+  archive by itself; the specialist
+  watches the outcome (FR-16, NFR-6).
+end note
+
+@enduml

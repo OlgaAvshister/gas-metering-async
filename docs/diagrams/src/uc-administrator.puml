@@ -1,0 +1,32 @@
+@startuml uc-administrator
+!pragma layout smetana
+left to right direction
+skinparam shadowing false
+skinparam usecase {
+  BackgroundColor #AEDCF0
+  BorderColor #3C7A99
+}
+
+title Administrator
+
+actor "Administrator" as admin
+
+rectangle System {
+  usecase "UC-16. Create a user and\nassign a role" as UC16
+  usecase "UC-17. Block or unblock\nan account" as UC17
+  usecase "UC-18. Review the audit journal\nof user actions" as UC18
+  usecase "UC-19. Maintain reference data" as UC19
+}
+
+admin -- UC16
+admin -- UC17
+admin -- UC18
+admin -- UC19
+
+note bottom of UC19
+  Method versions can be added,
+  never edited (ADR-003). Contract
+  parameters are read-only in the MVP.
+end note
+
+@enduml

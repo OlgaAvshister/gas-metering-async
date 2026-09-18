@@ -1,0 +1,44 @@
+@startuml uc-dispatcher-counterparty
+!pragma layout smetana
+left to right direction
+skinparam shadowing false
+skinparam usecase {
+  BackgroundColor #AEDCF0
+  BorderColor #3C7A99
+}
+
+title Dispatcher and counterparty representative
+
+actor "Counterparty\nrepresentative" as counterparty
+actor "Dispatcher" as dispatcher
+
+rectangle System {
+  usecase "UC-11. Review accounting data\nfor own delivery point" as UC11
+  usecase "UC-12. Upload own calculations\nfor reconciliation" as UC12
+  usecase "UC-13. Receive a deviation\nnotification" as UC13
+  usecase "UC-14. Review the correction\nhistory" as UC14
+
+  usecase "UC-01. Monitor nomination\nexecution per line" as UC01
+  usecase "UC-02. Receive a deviation\nalarm" as UC02
+  usecase "UC-03. Act during a loss of\nconnection to a node" as UC03
+  usecase "UC-04. Review operational\nhistory for a shift" as UC04
+}
+
+counterparty -- UC11
+counterparty -- UC12
+counterparty -- UC13
+counterparty -- UC14
+
+dispatcher -- UC01
+dispatcher -- UC04
+
+UC02 ..> UC01 : <<extend>>
+UC03 ..> UC01 : <<extend>>
+UC02 ..> UC13 : <<include>>
+
+note bottom of UC02
+  The notification is sent in parallel
+  with the alarm, not after it (ADR-004).
+end note
+
+@enduml

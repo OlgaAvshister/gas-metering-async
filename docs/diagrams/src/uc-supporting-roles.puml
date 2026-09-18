@@ -1,0 +1,31 @@
+@startuml uc-supporting-roles
+!pragma layout smetana
+left to right direction
+skinparam shadowing false
+skinparam usecase {
+  BackgroundColor #AEDCF0
+  BorderColor #3C7A99
+}
+
+title Financial controller, laboratory and regulator
+
+actor "Financial\ncontroller" as controller
+actor "Laboratory\ntechnician" as lab
+actor "Regulator" as regulator
+
+rectangle System {
+  usecase "UC-15. Export the financial\nsummary of acts" as UC15
+  usecase "UC-23. Upload chromatography\nresults" as UC23
+  usecase "UC-24. Export the full data set\nfor audit" as UC24
+}
+
+controller -- UC15
+lab -- UC23
+regulator -- UC24
+
+note bottom of UC24
+  The export records itself: who asked
+  for what data and when (UC-24, FR-26).
+end note
+
+@enduml

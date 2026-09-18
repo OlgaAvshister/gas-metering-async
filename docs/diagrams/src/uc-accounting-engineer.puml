@@ -1,0 +1,41 @@
+@startuml uc-accounting-engineer
+!pragma layout smetana
+left to right direction
+skinparam shadowing false
+skinparam usecase {
+  BackgroundColor #AEDCF0
+  BorderColor #3C7A99
+}
+
+title Accounting engineer
+
+actor "Accounting\nengineer" as engineer
+actor "Counterparty\nrepresentative" as counterparty
+
+rectangle System {
+  usecase "UC-05. Check that the inputs\nfor a calculation have arrived" as UC05
+  usecase "UC-06. Run the correction to\nstandard conditions" as UC06
+  usecase "UC-07. Review the correction\njournal" as UC07
+  usecase "UC-08. Produce the transfer act" as UC08
+  usecase "UC-09. Produce a corrective act" as UC09
+  usecase "UC-10. Reconcile against the\ncounterparty's data" as UC10
+  usecase "UC-25. Sign the transfer act" as UC25
+}
+
+engineer -- UC05
+engineer -- UC06
+engineer -- UC07
+engineer -- UC08
+engineer -- UC10
+engineer -- UC25
+
+counterparty -- UC25
+
+UC09 ..> UC06 : <<include>>
+
+note bottom of UC25
+  Both parties sign independently
+  and in no fixed order (FR-32).
+end note
+
+@enduml
