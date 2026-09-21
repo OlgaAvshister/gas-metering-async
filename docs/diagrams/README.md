@@ -2,6 +2,7 @@
 
 | Diagram | Notation | |
 |---|---|---|
+| Architecture at three levels: context, containers, components | C4 | [c4.md](c4.md) |
 | Handling a deviation, AS-IS and TO-BE | BPMN 2.0 | [process-deviation-handling.md](process-deviation-handling.md) |
 | Producing and signing the act | BPMN 2.0 | [process-act-signing.md](process-act-signing.md) |
 | Detecting a deviation, as designed and as implemented | UML sequence | [sequence-deviation-detection.md](sequence-deviation-detection.md) |
@@ -18,8 +19,9 @@ them:
 
 - **Sequence and ER diagrams** are Mermaid, written inline in the Markdown.
   GitHub renders them, so there is nothing to export.
-- **Use case diagrams** are PlantUML in [src](src), rendered to
-  [export](export). To regenerate after an edit:
+- **C4 and use case diagrams** are PlantUML in [src](src), rendered to
+  [export](export). C4 uses the C4-PlantUML library bundled with PlantUML. To
+  regenerate after an edit:
 
   ```
   java -jar plantuml.jar -tpng -o ../export docs/diagrams/src/*.puml

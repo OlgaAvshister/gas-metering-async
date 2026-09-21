@@ -1,0 +1,63 @@
+@startuml c4-container
+!pragma layout smetana
+!include <C4/C4_Container>
+
+LAYOUT_TOP_DOWN()
+HIDE_STEREOTYPE()
+
+AddElementTag("planned", $borderStyle=DashedLine(), $bgColor="#7FA8D1", $fontColor="#FFFFFF", $legendText="Planned, not yet built")
+AddRelTag("planned", $lineStyle=DashedLine(), $legendText="Planned")
+
+title Containers: gas metering and reconciliation
+
+Person(dispatcher, "Dispatcher")
+Person(counterparty, "Counterparty representative")
+
+System_Ext(scada, "SCADA", "Telemetry")
+System_Ext(lims, "Laboratory information system", "Gas composition")
+System_Ext(cpsys, "Counterparty accounting system", "Legacy")
+System_Ext(gateway, "Notification gateway", "Email, SMS")
+
+System_Boundary(gms, "Gas metering system") {
+    Container(web, "Web application", "Browser", "Dispatcher screen, acts, reconciliation", $tags="planned")
+    Container(api, "Intake and query API", "Python, FastAPI", "REST. Accepts measurements, serves data")
+    Container(grpc, "Telemetry intake", "Python, gRPC", "Streaming intake from SCADA", $tags="planned")
+    Container(adapter, "Counterparty adapter", "Python, SOAP client", "Translates the counterparty's XML into our model", $tags="planned")
+
+    ContainerDb(db, "Operational database", "PostgreSQL", "Measurements, aggregates, deviations, outbox")
+
+    Container(relay, "Outbox relay", "Python", "Publishes outbox rows to the brokers")
+    ContainerQueue(kafka, "Event log", "Kafka", "measurements.recorded, measurements.dlt")
+    ContainerQueue(rabbit, "Command queue", "RabbitMQ", "notification.send, retry, DLQ")
+
+    Container(agg, "Hourly aggregator", "Python", "Recomputes hourly aggregates")
+    Container(det, "Deviation detector", "Python", "Compares flow with the nomination")
+    Container(worker, "Notification worker", "Python", "Delivers notifications, retries")
+}
+
+Rel(dispatcher, web, "Uses", "HTTPS")
+Rel(counterparty, web, "Uses", "HTTPS")
+Rel(web, api, "Reads and writes", "REST, JSON", $tags="planned")
+
+Rel(scada, grpc, "Streams measurements", "gRPC", $tags="planned")
+Rel(lims, api, "Sends results", "REST")
+Rel(adapter, cpsys, "Fetches calculations", "SOAP", $tags="planned")
+
+Rel(api, db, "Measurement + outbox row, one transaction", "SQL")
+Rel(grpc, db, "Same write path", "SQL", $tags="planned")
+Rel(adapter, db, "Stores their figures", "SQL", $tags="planned")
+
+Rel(relay, db, "Reads unpublished rows", "SQL")
+Rel(relay, kafka, "Events", "key = node_id")
+Rel(relay, rabbit, "Commands", "AMQP")
+
+Rel(kafka, agg, "measurement.recorded")
+Rel(kafka, det, "measurement.recorded")
+Rel(agg, db, "Hourly aggregate", "SQL")
+Rel(det, db, "Deviation + outbox row", "SQL")
+
+Rel(rabbit, worker, "notification.send")
+Rel(worker, gateway, "Notification", "SMTP / SMS API")
+
+SHOW_LEGEND()
+@enduml

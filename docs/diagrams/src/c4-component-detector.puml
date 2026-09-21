@@ -1,0 +1,49 @@
+@startuml c4-component-detector
+!pragma layout smetana
+!include <C4/C4_Component>
+
+LAYOUT_TOP_DOWN()
+HIDE_STEREOTYPE()
+
+title Components: deviation detector
+
+ContainerQueue(kafka, "Event log", "Kafka", "measurements.recorded, measurements.dlt")
+ContainerDb(db, "Operational database", "PostgreSQL")
+Container(relay, "Outbox relay", "Python", "Publishes the command to RabbitMQ")
+
+Container_Boundary(det, "Deviation detector") {
+    Component(consumer, "Message consumer", "confluent-kafka", "Polls events; commits the offset only after the transaction succeeds")
+    Component(poison, "Poison handler", "poison.py", "Retries in place with seek, then parks the message in the dead letter topic")
+
+    Boundary(tx, "One database transaction") {
+        Component(dedup, "Deduplicator", "processed_message", "Skips a measurement already handled")
+        Component(gasday, "Gas day resolver", "gas_day_bounds", "Maps a timestamp to the 10:00 to 10:00 gas day")
+        Component(params, "Parameter lookup", "find_contract_parameter", "Contract parameters in force at measurement time")
+        Component(eval, "Deviation evaluator", "handle", "Instantaneous and accumulated comparison, two thresholds")
+        Component(guard, "Flapping guard", "has_open_accumulated_deviation", "One notification per open deviation")
+        Component(recorder, "Deviation recorder", "record_deviation", "Writes the deviation with its parameter version")
+        Component(enqueue, "Notification enqueuer", "queue_notification", "Writes the command to the outbox")
+    }
+}
+
+Rel(kafka, consumer, "measurement.recorded")
+Rel(consumer, dedup, "Event")
+Rel(consumer, poison, "On failure")
+Rel(poison, kafka, "Parks in measurements.dlt")
+
+Rel(dedup, gasday, "New measurement")
+Rel(gasday, params, "Gas day")
+Rel(params, eval, "Nomination, thresholds")
+Rel(eval, recorder, "Instantaneous breach")
+Rel(eval, guard, "Accumulated breach")
+Rel(guard, recorder, "No open deviation")
+Rel(recorder, enqueue, "Accumulated deviation")
+
+Rel(dedup, db, "processed_message", "SQL")
+Rel(params, db, "contract_parameter", "SQL")
+Rel(eval, db, "Measurements since gas day start", "SQL")
+Rel(recorder, db, "deviation", "SQL")
+Rel(enqueue, db, "outbox", "SQL")
+Rel(relay, db, "Reads the outbox", "SQL")
+
+@enduml

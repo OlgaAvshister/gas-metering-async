@@ -1,0 +1,32 @@
+@startuml c4-context
+!pragma layout smetana
+!include <C4/C4_Context>
+
+LAYOUT_TOP_DOWN()
+HIDE_STEREOTYPE()
+
+title System context: gas metering and reconciliation
+
+Person(dispatcher, "Dispatcher", "Steers the transport regime")
+Person(engineer, "Accounting engineer", "Calculates volumes, produces acts")
+Person(counterparty, "Counterparty representative", "Verifies figures, signs acts")
+Person(ops, "IT operations", "Watches channels and data flow")
+
+System(gms, "Gas metering system", "Collects, calculates and agrees gas delivery data between the two parties")
+
+System_Ext(scada, "SCADA", "Telemetry from metering nodes")
+System_Ext(lims, "Laboratory information system", "Gas composition analyses")
+System_Ext(cpsys, "Counterparty accounting system", "The counterparty's own calculations. Legacy, not under our control")
+System_Ext(gateway, "Notification gateway", "Email and SMS delivery")
+
+Rel_D(dispatcher, gms, "Monitors nomination", "HTTPS")
+Rel_D(engineer, gms, "Reconciles, produces acts", "HTTPS")
+Rel_D(counterparty, gms, "Reviews data, signs", "HTTPS")
+Rel_D(ops, gms, "Monitors infrastructure", "HTTPS")
+
+Rel_R(scada, gms, "Streams measurements", "gRPC")
+Rel_L(lims, gms, "Sends chromatography results", "REST")
+Rel_D(gms, cpsys, "Fetches calculations for reconciliation", "SOAP")
+Rel_D(gms, gateway, "Sends deviation notifications", "SMTP / SMS API")
+
+@enduml
