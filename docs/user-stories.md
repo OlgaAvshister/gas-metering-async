@@ -11,7 +11,7 @@ Two formats are used for acceptance criteria, on purpose:
   of order (what a document contains, who may see what).
 
 Every story includes at least one negative or failure criterion, because that is where
-the use cases' alternative branches live.
+the use cases' extensions live.
 
 ## Prioritization
 MoSCoW against the MVP goal stated in [02-scope.md](02-scope.md): the operator and the

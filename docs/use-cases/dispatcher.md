@@ -23,14 +23,18 @@ whether the transport regime needs adjusting.
 **Result.** The dispatcher has a current picture of nomination execution across
 all lines and can decide whether to adjust the regime.
 
-**Alternatives**
+**Extensions**
 
-- No data for the line: the system shows the last trustworthy value marked "no
-  data since HH:MM, showing last measurement".
-- The dispatcher picks another period — previous day, week: the system redraws
-  the chart for that period.
-- The deviation crosses the contractual threshold: the system highlights that
-  stretch of the chart in red and raises an alarm, moving to UC-02.
+- **2a.** No data has arrived for the line:
+  1. The system shows the last trustworthy value marked "no data since HH:MM,
+     showing last measurement" (FR-14).
+  2. The scenario continues at step 3.
+- **2b.** The dispatcher picks another period, the previous day or a week:
+  1. The system redraws the chart for that period.
+  2. The scenario continues at step 3.
+- **\*a.** At any step, actual flow leaves the contractual corridor:
+  1. The system highlights that stretch of the chart in red and raises an alarm.
+  2. The dispatcher moves to UC-02.
 
 ## UC-02. Receiving a deviation alarm
 
@@ -59,15 +63,19 @@ adjustment decision is made.
 *Implemented: steps 1 and 4 — recording the deviation and dispatching the
 notification. See [FR-07](../requirements/functional.md), FR-22.*
 
-**Alternatives**
+**Extensions**
 
-- The deviation clears by itself before the dispatcher reacts: the alarm is
-  withdrawn automatically and the event is logged.
-- The dispatcher cannot make the adjustment, because a valve has failed: the
-  dispatcher records the incident with a comment and notifies IT operations.
-- The counterparty did not receive the notification, because a channel failed:
-  the system records the non-delivery in the journal and retries through the
-  fallback channel, SMS or e-mail.
+- **4a.** The notification channel fails:
+  1. The system records the non-delivery in the journal.
+  2. The system retries through the fallback channel, SMS or e-mail (see UC-13).
+  3. The scenario continues at step 5.
+- **5a.** Flow returns inside the corridor before the dispatcher has decided:
+  1. The system withdraws the alarm automatically and logs the event.
+  2. The use case ends.
+- **5b.** The dispatcher cannot make the adjustment because a valve has failed:
+  1. The dispatcher records the incident with a comment.
+  2. The system notifies IT operations.
+  3. The scenario continues at step 6.
 
 ## UC-03. Acting during a loss of connection to a metering node
 
@@ -95,12 +103,16 @@ receiving data from the node until the connection dropped.
 **Result.** The dispatcher keeps at least an approximate picture and can act on
 incomplete information.
 
-**Alternatives**
+**Extensions**
 
-- The connection does not return for a long time, over two hours: the dispatcher
-  starts the manual control procedure and records the incident.
-- Several nodes drop at once: the system shows the status of each and the
-  dispatcher judges the scale of the problem.
+- **2a.** Several nodes lose connection at once:
+  1. The system shows the status and outage duration of each node separately.
+  2. The dispatcher judges the scale of the problem.
+  3. The scenario continues at step 5.
+- **5a.** The connection has not returned for over two hours:
+  1. The dispatcher starts the manual control procedure.
+  2. The dispatcher records the incident.
+  3. The scenario continues at step 6 when the connection returns.
 
 ## UC-04. Reviewing operational history for a shift
 
@@ -121,8 +133,12 @@ or to prepare a report.
 
 **Result.** The dispatcher has the analysis for the shift just ended.
 
-**Alternatives**
+**Extensions**
 
-- Data for part of the period is missing, because of outages: the system marks
-  those stretches "no data".
-- The dispatcher compares several lines: the system overlays their charts.
+- **2a.** The dispatcher wants to compare several lines:
+  1. The dispatcher selects additional lines.
+  2. The system overlays their charts.
+  3. The scenario continues at step 4.
+- **3a.** Data for part of the period is missing because of outages:
+  1. The system marks those stretches "no data".
+  2. The scenario continues at step 4.

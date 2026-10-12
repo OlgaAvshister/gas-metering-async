@@ -21,12 +21,15 @@ for billing and settlement.
 
 **Result.** The controller has structured data to pass to the finance system.
 
-**Alternatives**
+**Extensions**
 
-- Some acts in the period are unsigned: the system includes them marked "not
-  signed".
-- The controller asks for a summary for one counterparty: the system filters to
-  that counterparty.
+- **2a.** The controller needs a summary for one counterparty:
+  1. The controller selects the counterparty.
+  2. The system filters the data to that counterparty.
+  3. The scenario continues at step 3.
+- **3a.** Some acts in the period are unsigned:
+  1. The system includes them marked "not signed".
+  2. The scenario continues at step 4.
 
 ## UC-23. Uploading chromatography results
 
@@ -51,12 +54,15 @@ calculations.
 
 **Result.** The gas composition is loaded and ready for use in calculations.
 
-**Alternatives**
+**Extensions**
 
-- The data fails validation: the system shows the error and the technician
-  corrects and re-uploads.
-- The data is loaded but its period is already closed: the system accepts it and
-  marks it "requires a corrective act".
+- **5a.** The data fails validation:
+  1. The system shows which check failed.
+  2. The technician corrects the data; the scenario returns to step 4.
+- **6a.** The period the composition applies to is already closed:
+  1. The system accepts the data and marks it "requires a corrective act".
+  2. The system notifies the accounting engineer (UC-09).
+  3. The use case ends.
 
 ## UC-24. Exporting the full data set for audit
 
@@ -87,15 +93,19 @@ that the calculations are correct.
 
 **Result.** The regulator has a full export for an independent audit.
 
-**Alternatives**
+**Extensions**
 
-- The data set is too large: the system produces the export in parts, or notifies
-  the regulator when it is ready.
-- The regulator asks for a period that is not fully calculated: the system
-  exports what is available and marks the rest.
-- The data is needed in machine-readable form for loading into other software:
-  the system exports in a structured format — JSON, XML, CSV — matching the
-  regulator's requirements where these are known and covered by the MVP.
+- **4a.** The regulator needs the data in machine-readable form:
+  1. The regulator picks a structured format: JSON, XML or CSV, matching the
+     regulator's requirements where these are known and covered by the MVP.
+  2. The scenario continues at step 5.
+- **5a.** The data set is too large to produce at once:
+  1. The system produces the export in parts, or notifies the regulator when it is
+     ready.
+  2. The scenario continues at step 6.
+- **5b.** The requested period is not fully calculated:
+  1. The system exports what is available and marks the rest.
+  2. The scenario continues at step 6.
 
 ## UC-25. Signing the transfer act
 
@@ -124,17 +134,22 @@ the user is signed in.
 
 **Result.** The act is signed by both parties and the period awaits closing.
 
-**Alternatives**
+**Extensions**
 
-- The counterparty disagrees with the volumes: they raise a protocol of
-  disagreement instead of signing; the act does not move to "signed" and the
-  process passes to dispute resolution.
-- A user tries to sign an act for a delivery point they have no access to: the
-  system rejects the action and reports the missing right.
-- A party signs an act it has already signed: the system rejects the action and
-  reports that this party's signature is already recorded.
-- Signing is attempted after the period has closed, T + 10 having passed: the
-  system blocks it and reports that the period is closed.
+- **3a, 5a.** The party has already signed this act:
+  1. The system rejects the action and reports that this party's signature is
+     already recorded.
+  2. The scenario continues with the other party's signature.
+- **5b.** The user has no access to the act's delivery point:
+  1. The system rejects the action and reports the missing right.
+  2. The use case ends.
+- **5c.** The counterparty disagrees with the volumes:
+  1. The counterparty raises a protocol of disagreement instead of signing.
+  2. The act does not move to "signed".
+  3. The process passes to dispute resolution and the use case ends.
+- **\*a.** At any step, the period has closed, T + 10 having passed:
+  1. The system blocks signing and reports that the period is closed.
+  2. The use case ends.
 
 **Note.** Signing is a parallel process. Both parties sign independently, the
 system imposes no order, and it waits for both signatures before moving the act

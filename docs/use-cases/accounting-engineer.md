@@ -22,12 +22,16 @@ volume for a node is available, and what is holding things up.
 
 **Result.** The engineer knows what stage the data preparation has reached.
 
-**Alternatives**
+**Extensions**
 
-- The gas composition is later than the regulated deadline: the system shows a
-  warning and the engineer contacts the laboratory.
-- Part of the telemetry is irrecoverably lost: the system marks the period
-  "manual entry required" and the engineer enters readings from fallback sources.
+- **5a.** The gas composition is later than the regulated deadline:
+  1. The system shows a warning.
+  2. The engineer contacts the laboratory.
+  3. The use case ends.
+- **5b.** Part of the telemetry is irrecoverably lost:
+  1. The system marks the period "manual entry required".
+  2. The engineer enters readings from fallback sources.
+  3. The scenario continues at step 3 with the updated status.
 
 ## UC-06. Running the correction to standard conditions
 
@@ -61,21 +65,28 @@ validated telemetry, gas composition, and an assigned method version.
 1. The engineer opens the calculation management screen.
 2. The engineer selects a node and period and states the reason for
    recalculating.
-3. The system checks whether the period is closed; if it is, recalculation is
-   forbidden and only a corrective act is available.
+3. The system checks that the period is still open.
 4. The system recalculates under the same rules (FR-10).
 5. The system stores a new version of the accounting value (FR-12) and an entry
    in the correction journal (FR-13).
 
 **Result.** Accounting data is updated and the change is recorded in the journal.
 
-**Alternatives**
+**Extensions**
 
-- The gas composition has not arrived within the deadline (NFR-2): the system
-  shows "awaiting laboratory" and the engineer raises a manual request.
-- Telemetry failed validation, with outliers or anomalies: the system marks the
-  data suspect and does not start the calculation; the engineer checks it by
-  hand.
+- **Automatic, 1a.** The gas composition has not arrived within the deadline
+  (NFR-2):
+  1. The system shows "awaiting laboratory".
+  2. The engineer raises a manual request.
+  3. The scenario resumes at step 1 once the composition arrives.
+- **Automatic, 1b.** Telemetry failed validation, with outliers or anomalies:
+  1. The system marks the data suspect and does not start the calculation.
+  2. The engineer checks the data by hand (UC-05).
+  3. The use case ends.
+- **Manual, 3a.** The period is closed:
+  1. The system refuses the recalculation.
+  2. The system offers a corrective act (UC-09).
+  3. The use case ends.
 
 ## UC-07. Reviewing the correction journal
 
@@ -97,11 +108,15 @@ and understand why they were made.
 
 **Result.** The engineer has the full history of changes, for audit or analysis.
 
-**Alternatives**
+**Extensions**
 
-- Nothing matches the filters: the system shows "no records found".
-- The engineer exports the journal: the system produces a file in the agreed
-  format.
+- **3a.** Nothing matches the filters:
+  1. The system shows "no records found".
+  2. The scenario returns to step 2.
+- **4a.** The engineer needs the journal outside the system:
+  1. The engineer exports the journal.
+  2. The system produces a file in the agreed format.
+  3. The use case ends.
 
 ## UC-08. Producing the transfer act
 
@@ -128,13 +143,18 @@ calculated and stored.
 
 **Result.** The engineer has a transfer act ready for the parties to sign.
 
-**Alternatives**
+**Extensions**
 
-- The period is not fully calculated, with gaps or a pending gas composition: the
-  system warns the engineer and offers either to wait or to produce the act with
-  the calculated stretches flagged.
-- The period is already closed and its act signed: producing a new act is
-  forbidden and only a corrective act is available.
+- **3a.** The period is already closed and its act signed:
+  1. The system refuses to produce a new act.
+  2. The system offers a corrective act (UC-09).
+  3. The use case ends.
+- **4a.** The period is not fully calculated, with gaps or a pending gas
+  composition:
+  1. The system warns the engineer and offers to wait or to proceed.
+  2. If the engineer chooses to wait, the use case ends.
+  3. If the engineer proceeds, the scenario continues at step 5 and the act shows
+     the calculated stretches flagged.
 
 ## UC-09. Producing a corrective act
 
@@ -164,12 +184,15 @@ passed — but refined data has arrived or an error has been found.
 **Result.** The engineer has recorded a legally sound refinement without breaking
 the integrity of the closed period.
 
-**Alternatives**
+**Extensions**
 
-- The discrepancy is within the contractual threshold: the corrective act follows
-  the simplified procedure, without separate agreement.
-- The discrepancy exceeds the threshold: the system marks the act as requiring
-  agreement between the parties.
+- **7a.** The discrepancy is within the contractual threshold:
+  1. The system marks the corrective act "simplified procedure", with no separate
+     agreement needed.
+  2. The scenario continues at step 8.
+- **7b.** The discrepancy exceeds the contractual threshold:
+  1. The system marks the corrective act "requires agreement of the parties".
+  2. The scenario continues at step 8.
 
 ## UC-10. Reconciling against the counterparty's data
 
@@ -194,9 +217,12 @@ find discrepancies before the act is signed.
 **Result.** The engineer has found and analysed the discrepancies and is ready for
 the act to be signed.
 
-**Alternatives**
+**Extensions**
 
-- Nothing falls outside the tolerance: the system shows "no discrepancies found,
-  act ready for signing".
-- The counterparty's data has not been loaded: the engineer is told to upload it
-  or to wait for the API response.
+- **3a.** The counterparty's data has not been loaded:
+  1. The system tells the engineer to upload the file or wait for the API
+     response.
+  2. The scenario resumes at step 3 once the data is available.
+- **5a.** Nothing falls outside the tolerance:
+  1. The system shows "no discrepancies found, act ready for signing".
+  2. The use case ends.

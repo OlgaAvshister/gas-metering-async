@@ -23,12 +23,14 @@
 
 **Result.** The user exists and can sign in with the appropriate rights.
 
-**Alternatives**
+**Extensions**
 
-- A user with that login already exists: the system shows an error and asks for a
-  different login.
-- The administrator withdraws the invitation before it is used: the system blocks
-  the account.
+- **6a.** A user with that login already exists:
+  1. The system shows an error and asks for a different login.
+  2. The scenario returns to step 3.
+- **7a.** The administrator withdraws the invitation before it is used:
+  1. The system blocks the account.
+  2. The use case ends.
 
 ## UC-17. Blocking and unblocking an account
 
@@ -43,14 +45,18 @@ needed.
 2. The administrator finds the user in the list.
 3. The administrator chooses "block" or "unblock".
 4. The system confirms the action and changes the account status.
-5. On blocking, the system ends the user's active sessions.
 
 **Result.** The account is blocked or unblocked.
 
-**Alternatives**
+**Extensions**
 
-- The administrator blocks a user with an active session: the system ends the
-  session by force and blocks sign-in.
+- **2a.** The user is not found:
+  1. The system shows "no users found".
+  2. The administrator changes the search; the scenario returns to step 2.
+- **4a.** On blocking, the user has an active session:
+  1. The system ends the session by force rather than waiting for it to expire.
+  2. The system refuses any further sign-in.
+  3. The use case ends.
 
 ## UC-18. Reviewing the audit journal of user actions
 
@@ -70,10 +76,15 @@ incidents.
 **Result.** The administrator has the information needed for oversight and
 investigation.
 
-**Alternatives**
+**Extensions**
 
-- No filters are set: the system shows all entries for the last 24 hours.
-- The administrator exports the journal for an arbitrary period.
+- **2a.** No filters are set:
+  1. The system shows all entries for the last 24 hours.
+  2. The scenario continues at step 4.
+- **4a.** The administrator needs the journal for an arbitrary period:
+  1. The administrator sets the period and exports the journal.
+  2. The system produces the file.
+  3. The use case ends.
 
 ## UC-19. Maintaining reference data
 
@@ -95,8 +106,10 @@ future calculations are correct.
 
 **Result.** Reference data is updated and future calculations use it.
 
-**Alternatives**
+**Extensions**
 
-- The administrator tries to change a contract parameter through the interface:
-  the system blocks the action and shows "changing contract parameters is not
-  supported in the MVP".
+- **4a.** The administrator tries to change a contract parameter through the
+  interface:
+  1. The system blocks the action and shows "changing contract parameters is not
+     supported in the MVP".
+  2. The use case ends.

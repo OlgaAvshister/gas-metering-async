@@ -68,7 +68,7 @@ erDiagram
 ## Notes
 
 `ActSignature`: the pair (`act_id`, `party`) is unique — a second signature by
-the same party is rejected. See UC-25, alternative scenario, and the 409 response
+the same party is rejected. See UC-25, extension 3a, 5a, and the 409 response
 on `POST /acts/{actId}/signatures`. An act moves to "signed" only once both
 signatures are present, and the order of signing is not fixed.
 

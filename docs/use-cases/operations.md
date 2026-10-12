@@ -20,11 +20,14 @@ integration gateways, to catch problems in time.
 
 **Result.** The specialist has a current picture of the infrastructure.
 
-**Alternatives**
+**Extensions**
 
-- A channel is lost: the system highlights the status in red and the specialist
-  moves to recovery (UC-22).
-- A delay crosses the permitted threshold: the system shows a warning.
+- **2a.** A delivery delay crosses the permitted threshold:
+  1. The system shows a warning on the affected channel.
+  2. The scenario continues at step 3.
+- **2b.** A channel to a metering node is lost:
+  1. The system highlights its status in red and raises an alert (UC-21).
+  2. Recovery starts once the connection returns (UC-22).
 
 ## UC-21. Receiving an alert about data loss
 
@@ -44,12 +47,14 @@ putting it right.
 
 **Result.** IT operations is informed in time and can begin recovery.
 
-**Alternatives**
+**Extensions**
 
-- The problem resolves itself, a fallback channel comes back for instance: the
-  system withdraws the alert and records the recovery.
-- The alert is not acknowledged within the set time: the system escalates it to a
-  senior specialist.
+- **3a.** The alert is not acknowledged within the set time:
+  1. The system escalates it to a senior specialist.
+  2. The scenario continues at step 4.
+- **4a.** The problem resolves itself, a fallback channel comes back for instance:
+  1. The system withdraws the alert and records the recovery.
+  2. The use case ends.
 
 ## UC-22. Recovering data after a connection outage
 
@@ -81,9 +86,12 @@ system is ready to recalculate the accounting volumes.
 constraint on node and measurement time rather than by application logic. See
 [FR-16](../requirements/functional.md), NFR-6.*
 
-**Alternatives**
+**Extensions**
 
-- The archive is not deep enough to cover the whole outage: the system loads what
-  is available and marks the remainder "unmeasured".
-- The controller returns corrupted data: the system rejects it and notifies IT
-  operations.
+- **2a.** The controller returns corrupted data:
+  1. The system rejects it and notifies IT operations.
+  2. The use case ends.
+- **4a.** The archive is not deep enough to cover the whole outage:
+  1. The system loads what is available and marks the remainder "unmeasured",
+     without interpolation.
+  2. The scenario continues at step 5.

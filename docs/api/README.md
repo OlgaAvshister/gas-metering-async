@@ -27,7 +27,7 @@ Nothing here is decorative. Each part traces to something upstream:
   attributes become properties; enums come from the values the model names.
 - **Operations** come from the [use cases](../use-cases/README.md). Each one
   names the case it serves.
-- **Error responses** come from the alternative scenarios in those cases. A
+- **Error responses** come from the extensions in those cases. A
   second signature by the same party is a 409 because UC-25 says the system
   rejects it; a counterparty reaching outside its delivery point is a 403
   because NFR-12 says so.

@@ -42,8 +42,8 @@ two branches that run at the same time: notify the counterparty over the primary
 channel, and raise the dispatcher's alarm.
 
 The notification branch checks delivery. On failure the system records the
-non-delivery and sends over the backup channel, which is UC-02's alternative
-scenario and NFR-5's three minutes. On success, if the deviation cleared before
+non-delivery and sends over the backup channel, which is UC-02's extension 4a
+and NFR-5's three minutes. On success, if the deviation cleared before
 the dispatcher reacted, the system withdraws the alarm by itself and logs that it
 resolved without intervention.
 

@@ -22,12 +22,16 @@ delivery point, and be satisfied they are correct.
 
 **Result.** The counterparty has everything needed to check the calculations.
 
-**Alternatives**
+**Extensions**
 
-- The counterparty asks for a period that is not fully calculated: the system
-  shows what is available and marks the rest "calculation not complete".
-- The counterparty exports the data: the system produces a file in the agreed
-  format, Excel or CSV.
+- **4a.** The requested period is not fully calculated:
+  1. The system shows what is available and marks the rest "calculation not
+     complete".
+  2. The scenario continues at step 5.
+- **4b.** The counterparty needs the data outside the system:
+  1. The counterparty exports the data.
+  2. The system produces a file in the agreed format, Excel or CSV.
+  3. The scenario continues at step 5.
 
 ## UC-12. Uploading one's own calculations for reconciliation
 
@@ -54,11 +58,14 @@ find discrepancies before the act is signed.
 **Result.** The counterparty can see whether their calculations agree with the
 operator's, and can decide whether to sign the act or ask for a correction.
 
-**Alternatives**
+**Extensions**
 
-- Nothing falls outside the tolerance: the system shows "no discrepancies found".
-- The uploaded file is in the wrong format: the system rejects it and states
-  which formats are accepted.
+- **3a.** The uploaded file is in the wrong format:
+  1. The system rejects the file and states which formats are accepted.
+  2. The scenario returns to step 3.
+- **6a.** Nothing falls outside the tolerance:
+  1. The system shows "no discrepancies found".
+  2. The use case ends.
 
 ## UC-13. Receiving a deviation notification
 
@@ -86,12 +93,15 @@ channels recorded — SMS, e-mail.
 guarantees around it. Sending itself is simulated — no real gateway. See
 [NFR-5](../requirements/non-functional.md), NFR-13.*
 
-**Alternatives**
+**Extensions**
 
-- One channel is unavailable, an SMS fails to send: the system sends through the
-  fallback channel.
-- The deviation clears before the notification goes out: the system sends a
-  notification of "deviation recorded and cleared".
+- **2a.** The deviation clears before the notification goes out:
+  1. The system composes a notification of "deviation recorded and cleared".
+  2. The scenario continues at step 3.
+- **3a.** One channel is unavailable, an SMS fails to send:
+  1. The system records the failure.
+  2. The system sends through the fallback channel.
+  3. The scenario continues at step 4.
 
 ## UC-14. Reviewing the correction history
 
@@ -114,7 +124,12 @@ counterparty's delivery point, and be satisfied they were justified.
 **Result.** The counterparty has transparent information about every change and
 can verify the calculations.
 
-**Alternatives**
+**Extensions**
 
-- Nothing matches the filters: the system shows "no records found".
-- The counterparty exports the journal: the system produces a file.
+- **4a.** Nothing matches the filters:
+  1. The system shows "no records found".
+  2. The scenario returns to step 3.
+- **5a.** The counterparty needs the journal outside the system:
+  1. The counterparty exports the journal.
+  2. The system produces a file.
+  3. The use case ends.
